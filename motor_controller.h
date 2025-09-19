@@ -1,16 +1,19 @@
 
 
 //=============================================================================
+//==============    ( motor_controller.h )  ===================================
 //=============================================================================
-//=============================================================================
+
+
+
+
 //=============================================================================
 //=============================================================================
 //=============================================================================
 //  ПРИВЕТ!! Окружение: Arduino IDE, микроконтроллер esp32, моторы без драйверов, 
 //  управляются напрямую от ESP32 , используются два пина для двух моторов: GPIO25 для 
 //  мотора_А и GPIO26 для мотора_Б ,моторы питаются через регулятор скорости BLHeli 
-//  EMAX ESC от источника питания: 21V, 6500 mAh   Исходные файлы проекта находятся по 
-//  адресу: https://github.com/RivaVal/Repo-1.0001.git Прошу  проанализировать код 
+//  EMAX ESC от источника питания: 21V, 6500 mAh    Прошу  проанализировать код 
 //  проекта из github, прошу на основе уже существующих мождулей, дать вариант МОДУЛЯ 
 //  управления двумя моторами при движении моторов в одну сторону: QX Motor QF(2827) 2227-1800KV 
 //  без драйвера, на основе последней актуальной версии mcpwm, НУЖЕН вариант кода, который 
@@ -29,12 +32,6 @@
 //=============================================================================
 //=============================================================================
 //=============================================================================
-
-//  Вы абсолютно правы! Используется устаревший драйвер MCPWM. Вот обновленная 
-//  версия с актуальным драйвером mcpwm_prelude.h:
-//  Обновленный модуль с актуальным MCPWM (motor_controller.h)
-
-
 //  / * *
 //   * Модуль для управления двумя моторами QX Motor QF(2827) 2227-1800KV
 //   * через ESC регуляторы BLHeli EMAX с использованием нового MCPWM Prelude API.
@@ -47,10 +44,19 @@
 //   * Питание: 21V, 6500mAh
 //  
 //   * /
-//   *     |   ^
+//   *   ( motor_controller.h )
+//   *
+//   *
 //   * Только движение в одну сторону.
 //   * Версия: 2.0.1 (исправлены предупреждения инициализации)
 //   * /
+//==============================================================
+//	📄 motor_controller.h (исправленный)
+//==============================================================
+//  📄 motor_controller.h (единый файл)
+//==============================================================
+//📄 motor_controller.h (исправленная версия)
+//==============================================================  
 
 #ifndef MOTOR_CONTROLLER_H
 #define MOTOR_CONTROLLER_H
@@ -60,124 +66,65 @@
 
 class MotorController {
 private:
-  // Конфигурация пинов ESC
-  const int ESC_A_PIN = 25;
-  const int ESC_B_PIN = 26;
-  
-  // Параметры ESC (микросекунды)
-  const int ESC_MIN_US = 1000;    // 0% скорости (стоп)
-  const int ESC_MAX_US = 2000;    // 100% скорости
-  const int ESC_NEUTRAL_US = 1500; // Нейтральное положение
-  
-  // Параметры тестового прогона
-  const int TEST_SPEED_PERCENT = 70;  // Тестовая скорость (70%)
-  const int TEST_DURATION_SEC = 240;  // Длительность теста (240 сек = 4 мин)
-  const int PWM_FREQUENCY = 50;       // 50 Hz для ESC
-  
-  // MCPWM объекты
-  mcpwm_timer_handle_t timer_a = NULL;
-  mcpwm_timer_handle_t timer_b = NULL;
-  mcpwm_oper_handle_t oper_a = NULL;
-  mcpwm_oper_handle_t oper_b = NULL;
-  mcpwm_cmpr_handle_t comparator_a = NULL;
-  mcpwm_cmpr_handle_t comparator_b = NULL;
-  mcpwm_gen_handle_t generator_a = NULL;
-  mcpwm_gen_handle_t generator_b = NULL;
-  
-  // Текущие скорости моторов (0-100%)
-  int current_speed_a;
-  int current_speed_b;
-  
-  // Флаги состояния
-  bool is_test_running;
-  unsigned long test_start_time;
-  
-  /**
-   * Инициализация MCPWM для ESC с новым API
-   */
-  void init_esc_mcpwm_prelude();
-  
-  /**
-   * Преобразование процентов в микросекунды для ESC
-   * @param speed_percent Скорость в процентах (0-100)
-   * @return int Ширина импульса в микросекундах
-   */
-  int percent_to_us(int speed_percent);
-  
-  /**
-   * Установка скорости для ESC
-   * @param speed_percent Скорость в процентах (0-100)
-   * @param motor_id Идентификатор мотора ('A' или 'B')
-   */
-  void set_esc_speed(int speed_percent, char motor_id);
-  
-  /**
-   * Плавное изменение скорости
-   * @param target_speed Целевая скорость (0-100%)
-   * @param duration Время изменения (сек)
-   */
-  void ramp_speed(int target_speed, float duration);
+    // Конфигурация пинов ESC
+    static const int ESC_A_PIN = 25;
+    static const int ESC_B_PIN = 26;
+    
+    // Параметры ESC
+    static const int ESC_MIN_US = 1000;
+    static const int ESC_MAX_US = 2000;
+    static const int PWM_FREQUENCY = 50;
+    
+    // Параметры тестового прогона
+    static const int TEST_SPEED_PERCENT = 70;
+    static const int TEST_DURATION_SEC = 240;
+    
+    // MCPWM объекты
+    mcpwm_timer_handle_t timer_a = nullptr;
+    mcpwm_timer_handle_t timer_b = nullptr;
+    mcpwm_oper_handle_t oper_a = nullptr;
+    mcpwm_oper_handle_t oper_b = nullptr;
+    mcpwm_cmpr_handle_t comparator_a = nullptr;
+    mcpwm_cmpr_handle_t comparator_b = nullptr;
+    mcpwm_gen_handle_t generator_a = nullptr;
+    mcpwm_gen_handle_t generator_b = nullptr;
+    
+    // Текущие скорости моторов
+    int current_speed_a;
+    int current_speed_b;
+    
+    // Флаги состояния
+    bool is_test_running;
+    unsigned long test_start_time;
+    unsigned long last_report_time;
+    
+    // Приватные методы
+    void init_mcpwm_components();
+    void setup_generator_actions();
+    void safe_delete(mcpwm_timer_handle_t& handle);
+    void safe_delete(mcpwm_oper_handle_t& handle);
+    void safe_delete(mcpwm_cmpr_handle_t& handle);
+    void safe_delete(mcpwm_gen_handle_t& handle);
+    
+    int percent_to_us(int speed_percent) const;
+    uint32_t us_to_ticks(int us) const;
+    bool set_motor_speed(char motor_id, int speed_percent);
+    void ramp_speed(int target_speed, float duration);
 
 public:
-  /**
-   * Конструктор контроллера моторов
-   */
-  MotorController();
-  
-  /**
-   * Деструктор для очистки ресурсов
-   */
-  ~MotorController();
-  
-  /**
-   * Инициализация ESC
-   */
-  void init_esc();
-  
-  /**
-   * Установка скорости моторов
-   * @param speed Скорость в процентах (0-100)
-   * @param ramp_time Время плавного изменения (сек)
-   * @return bool Успешность выполнения
-   */
-  bool set_motors_speed(int speed, float ramp_time = 0);
-  
-  /**
-   * Остановка моторов
-   * @param ramp_time Время плавной остановки (сек)
-   */
-  void stop_motors(float ramp_time = 0);
-  
-  /**
-   * Запуск тестового прогона
-   */
-  void start_test_sequence();
-  
-  /**
-   * Остановка тестового прогона
-   */
-  void stop_test_sequence();
-  
-  /**
-   * Получение статуса моторов
-   * @return String Статус в JSON формате
-   */
-  String get_motors_status();
-  
-  /**
-   * Проверка выполнения тестового прогона
-   * @return bool true если тест выполняется
-   */
-  bool is_test_active();
-  
-  /**
-   * Обновление состояния (вызывать в loop)
-   */
-  void update();
+    MotorController();
+    ~MotorController();
+    
+    bool init_esc();
+    bool set_motors_speed(int speed, float ramp_time = 0);
+    void stop_motors(float ramp_time = 0);
+    bool start_test_sequence();
+    void stop_test_sequence();
+    String get_motors_status() const;
+    bool is_test_active() const;
+    void update();
 };
 
-// Глобальный экземпляр контроллера моторов
 extern MotorController motor_controller;
 
 #endif
-

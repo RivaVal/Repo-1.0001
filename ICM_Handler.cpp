@@ -1,24 +1,17 @@
 
 
-
+    //======================================
     //  3. Исправленный ICM_Handler.cpp
-    //  cpp
+    //======================================
     //  4. Исправленный ICM_Handler.cpp
-    //  cpp
     //
+    //  6. ICM_Handler.cpp - Полная реализация с буфером
+    //
+
 #include "ICM_Handler.h"
 
-// Определение статических переменных
+// Инициализация статических переменных
 uint32_t ICMHandler::last_read_time = 0;
-          //  SensorData ICMHandler::current_data = {0};
-uint32_t ICMHandler::read_count = 0;
-uint32_t ICMHandler::error_count = 0;
-
-
-    //  3. Обновим ICM_Handler.cpp
-    //  cpp
-    //
-// Правильная инициализация SensorData
 SensorData ICMHandler::current_data = {
     .timestamp = 0,
     .accel = {0, 0, 0},
@@ -28,7 +21,13 @@ SensorData ICMHandler::current_data = {
     .quat = {0, 0, 0, 0},
     .status = 0
 };
+uint32_t ICMHandler::read_count = 0;
+uint32_t ICMHandler::error_count = 0;
 
+// Буферные переменные
+SensorData ICMHandler::data_buffer[ICMHandler::BUFFER_SIZE];
+size_t ICMHandler::buffer_index = 0;
+bool ICMHandler::buffer_overflow = false;
 
 bool ICMHandler::begin() {
     if (!SPIManager::acquireForICM(10)) {
@@ -48,46 +47,98 @@ bool ICMHandler::begin() {
         digitalWrite(SPI_ICM_CS, HIGH);
         
         success = (id == 0xEA);
+        if (success) {
+            Serial.println("✅ ICM-20948 initialized successfully");
+        } else {
+            Serial.printf("❌ ICM-20948 init failed. ID: 0x%02X\n", id);
+        }
     } catch (...) {
         success = false;
+        Serial.println("❌ Exception during ICM initialization");
     }
     
     spi.endTransaction();
     SPIManager::release();
     
     if (!success) error_count++;
+    
+    // Инициализация буфера
+    clearBuffer();
+    
     return success;
 }
 
 bool ICMHandler::readData() {
-    if (millis() - last_read_time < READ_INTERVAL) {
+    uint32_t current_time = millis();
+    
+    // Защита от переполнения millis()
+    if ((uint32_t)(current_time - last_read_time) < READ_INTERVAL) {
         return false;
     }
 
     if (!SPIManager::acquireForICM(5)) {
         error_count++;
+        Serial.println("⚠️ Failed to acquire SPI for ICM");
         return false;
     }
 
+    bool read_success = true;
     SPIClass& spi = SPIManager::getSPI();
-    spi.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE0));
     
-    digitalWrite(SPI_ICM_CS, LOW);
-    // Чтение данных ICM
-    spi.transfer(0x80 | 0x06); // ACCEL_XOUT_H
-    current_data.accel[0] = (spi.transfer(0) << 8) | spi.transfer(0);
-    current_data.accel[1] = (spi.transfer(0) << 8) | spi.transfer(0);
-    current_data.accel[2] = (spi.transfer(0) << 8) | spi.transfer(0);
-    digitalWrite(SPI_ICM_CS, HIGH);
+    try {
+        spi.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE0));
+        
+        // Чтение акселерометра
+        digitalWrite(SPI_ICM_CS, LOW);
+        spi.transfer(0x80 | 0x2D); // ACCEL_XOUT_H
+        current_data.accel[0] = (spi.transfer(0) << 8) | spi.transfer(0);
+        current_data.accel[1] = (spi.transfer(0) << 8) | spi.transfer(0);
+        current_data.accel[2] = (spi.transfer(0) << 8) | spi.transfer(0);
+        digitalWrite(SPI_ICM_CS, HIGH);
+        
+        // Чтение гироскопа (добавьте аналогично)
+        // Чтение магнитометра (добавьте аналогично)
+        
+        spi.endTransaction();
+        
+    } catch (...) {
+        read_success = false;
+        Serial.println("❌ Exception during ICM data reading");
+    }
     
-    spi.endTransaction();
     SPIManager::release();
 
-    current_data.timestamp = millis();
-    last_read_time = current_data.timestamp;
-    read_count++;
+    if (read_success) {
+        current_data.timestamp = current_time;
+        last_read_time = current_time;
+        read_count++;
+        
+        // Добавление данных в буфер
+        addToBuffer(current_data);
+        
+        // Периодический отчет о состоянии буфера
+        if (read_count % 50 == 0) {
+            Serial.printf("📊 ICM Buffer: %d/%d (%.1f%%)", 
+                         buffer_index, BUFFER_SIZE, getBufferUsage());
+            if (buffer_overflow) Serial.print(" [OVERFLOW]");
+            Serial.println();
+        }
+    } else {
+        error_count++;
+    }
     
-    return true;
+    return read_success;
+}
+
+bool ICMHandler::addToBuffer(const SensorData& data) {
+    if (buffer_index < BUFFER_SIZE) {
+        data_buffer[buffer_index++] = data;
+        return true;
+    } else {
+        buffer_overflow = true;
+        Serial.println("⚠️ ICM buffer overflow! Data lost.");
+        return false;
+    }
 }
 
 const SensorData& ICMHandler::getData() {
@@ -95,7 +146,8 @@ const SensorData& ICMHandler::getData() {
 }
 
 bool ICMHandler::isDataFresh() {
-    return (millis() - last_read_time) < (READ_INTERVAL + 5);
+    uint32_t current_time = millis();
+    return (uint32_t)(current_time - last_read_time) < (READ_INTERVAL + 5);
 }
 
 uint32_t ICMHandler::getReadCount() {
@@ -105,3 +157,42 @@ uint32_t ICMHandler::getReadCount() {
 uint32_t ICMHandler::getErrorCount() {
     return error_count;
 }
+
+
+//=================================================================================
+    /*
+    //  7. Интеграция с SDHandler - Пример использования буфера
+    //  cpp
+
+// В основном коде или в SDHandler
+void processICMData() {
+    if (ICMHandler::getBufferSize() > 0) {
+        const SensorData* buffer = ICMHandler::getBuffer();
+        size_t buffer_size = ICMHandler::getBufferSize();
+        
+        // Пакетная запись в SD
+        for (size_t i = 0; i < buffer_size; i++) {
+            SDHandler::writeData(buffer[i]);
+        }
+        
+        // Очистка буфера после записи
+        ICMHandler::clearBuffer();
+        
+        Serial.printf("💾 Written %d samples from ICM buffer to SD\n", buffer_size);
+    }
+}
+
+// Или в loop()
+void loop() {
+    // Чтение данных с ICM
+    ICMHandler::readData();
+    
+    // Периодическая запись буфера на SD (например, каждые 2 секунды)
+    static uint32_t last_buffer_flush = 0;
+    if (millis() - last_buffer_flush > 2000) {
+        processICMData();
+        last_buffer_flush = millis();
+    }
+}
+    */
+//========================================================================================
