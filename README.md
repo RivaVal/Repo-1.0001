@@ -71,3 +71,20 @@
     GPIO33 - SD_CS
     GPIO12-14, 26-27 - сервоприводы
 
+4. Полная конфигурация:
+
+// E49_Config.h - ПРАВИЛЬНЫЕ пины:
+const uint8_t E49_PIN_RX = 16;
+const uint8_t E49_PIN_TX = 17; 
+const uint8_t E49_PIN_M0 = 4;
+const uint8_t E49_PIN_M1 = 21;  // ✅ Правильно - GPIO 21
+const uint8_t E49_PIN_AUX = 5;
+
+// SPI пины - СВОБОДНЫ от конфликтов:
+#define VSPI_SCLK 18   // Только для SPI!
+#define VSPI_MISO 19   // Только для SPI!  
+#define VSPI_MOSI 23   // Только для SPI!
+#define ICM_CS    22   // Любой свободны
+
+//-----------------------------------------------------
+
