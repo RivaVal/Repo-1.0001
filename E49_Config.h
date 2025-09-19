@@ -11,21 +11,46 @@
 
 #pragma once
 
-// Пины для SD Card (используем тот же VSPI)
-#define SD_CS    33    // Уже используется в вашем коде
 
-// Пины для ICM-20948 (VSPI - стандартный SPI)
-#define ICM_CS   22    // Custom CS pin
-#define ICM_INT  32    // Interrupt pin (опционально)
-//  Код для SPI:
+// Структура передаваемых данных
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t  preamble[2];    // 0xAA 0x55
+    uint16_t packet_id;      // Счетчик пакетов
+    uint8_t  comUp;          // 0-255
+    uint8_t  comLeft;        // 0-255
+    uint16_t comThrottle;    // 1000-2000
+    uint8_t  comParashut;    // 0/1
+    uint32_t timestamp;      // Время из millis()
+    uint8_t  comSetAll;      // Битовая маска
+    uint8_t  crc8;           // Контрольная сумма
+} DataComSet_t;
+#pragma pack(pop)
+
+// Структура подтверждения передачи
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t preamble[2];        // 1 0x55 0xAA
+    uint16_t packet_id;         // 2 ID подтверждаемого пакета
+    uint32_t timestamp ;        // 4 Время отправки пакета
+    uint8_t status;             // 1 Статус получения
+    uint8_t crc8;               // 1 Контрольная сумма
+} AckPacket_t;
+        //#pragma pack(pop)
+
+// Размеры структур
+constexpr uint8_t DATA_COM_SET_SIZE =  sizeof(DataComSet_t) ;
+constexpr uint8_t ACK_PACKET_SIZE = sizeof(AckPacket_t) ;
+
+// Добавить новые определения:
+#define E49_ICM_CS   22    // Новое имя для ICM
+#define E49_SD_CS    33    // Новое имя для SD
+#define E49_ICM_INT  32    // Interrupt pin (опционально)
 // Используем стандартный VSPI
 // VSPI пины по умолчанию на ESP32:
 #define VSPI_SCLK   18
 #define VSPI_MISO   19
 #define VSPI_MOSI   23
-
-//#define ICM_CS      22
-//#define SD_CS       33
 
 // Конфигурация пинов для модуля E49 
 const uint8_t E49_PIN_RX = 16 ;
@@ -69,8 +94,6 @@ const uint8_t MAX_RETRIES = 7;  // 3          // Макс. попыток пов
 #define RECEIVE_TIMEOUT_MS 1000   //200
 #define AUX_WAIT_TIMEOUT_MS 500   //    200
 #define CONNECTION_TIMEOUT_MS 5000
-// #define RECONNECT_INTERVAL_MS 5000
-// #define ACK_TIMEOUT 500    //200        // Таймаут ожидания ACK (мс)
 
 // LED индикация
 #define LED_PIN 2
@@ -79,19 +102,10 @@ const uint8_t MAX_RETRIES = 7;  // 3          // Макс. попыток пов
 // CRC8 полином
 #define CRC8_POLYNOMIAL 0x07
 
-// Размеры структур
-//#define DATA_COM_SET_SIZE sizeof(DataComSet_t)
-//#define ACK_PACKET_SIZE sizeof(AckPacket_t)
-
-
 // Преамбула пакета
 const uint8_t PACKET_PREAMBLE_1 = 0xAA ;
 const uint8_t PACKET_PREAMBLE_2 = 0x55 ;
-
 const uint8_t COM_SETALL_MASK = 0b00000001 ; //  Начальная Маска данных  
-
-//  const uint8_t PACKET_ACK_PREAMBLE_1 = 0xAA ;
-//  const uint8_t PACKET_ACK_PREAMBLE_2 = 0x55 ;
 
 #define DEBUG_LEVEL 5
 #define STATS_INTERVAL_MS 15000
@@ -119,6 +133,9 @@ enum ebyteStatus {
     EBYTE_ERROR_CONNECTION_LOST
 };
 
+// Добавьте если нет:
+extern const int servoPins[5];
+extern const ledc_channel_t channels[5];
 
 
 // Структура c бинарными данными для сбора их из модуля ICM_20948
@@ -133,33 +150,6 @@ struct SensorData {
   uint8_t status;      // статус DMP
 };
 #pragma pack(pop)
-
-
-// Структура передаваемых данных
-#pragma pack(push, 1)
-typedef struct {
-    uint8_t  preamble[2];    // 0xAA 0x55
-    uint16_t packet_id;      // Счетчик пакетов
-    uint8_t  comUp;          // 0-255
-    uint8_t  comLeft;        // 0-255
-    uint16_t comThrottle;    // 1000-2000
-    uint8_t  comParashut;    // 0/1
-    uint32_t timestamp;      // Время из millis()
-    uint8_t  comSetAll;      // Битовая маска
-    uint8_t  crc8;           // Контрольная сумма
-} DataComSet_t;
-#pragma pack(pop)
-
-// Структура подтверждения передачи
-#pragma pack(push, 1)
-typedef struct {
-    uint8_t preamble[2];        // 1 0x55 0xAA
-    uint16_t packet_id;         // 2 ID подтверждаемого пакета
-    uint32_t timestamp ;        // 4 Время отправки пакета
-    uint8_t status;             // 1 Статус получения
-    uint8_t crc8;               // 1 Контрольная сумма
-} AckPacket_t;
-        //#pragma pack(pop)
 
 // Статистика работы модуля E49
 typedef struct {
@@ -181,10 +171,8 @@ typedef struct {
 
 
 // Размеры буферов // Размеры структур
-constexpr uint8_t MAX_PACKET_SIZE =  sizeof(DataComSet_t) ;
-constexpr uint8_t ACK_PACKET_SIZE =  sizeof(AckPacket_t) ;
-
-
+            //  constexpr uint8_t MAX_PACKET_SIZE =  sizeof(DataComSet_t) ;
+            //  constexpr uint8_t ACK_PACKET_SIZE =  sizeof(AckPacket_t) ;
 
 // ================== КОНСТАНТЫ ВРЕМЕННЫХ ИНТЕРВАЛОВ ==================
 const uint32_t INTERVAL_EBYTE_PROCESS = 50;
@@ -194,8 +182,6 @@ const uint32_t INTERVAL_SENSOR_READ = 100;
 const uint32_t INTERVAL_STATS_DISPLAY = 5000;
 const uint32_t INTERVAL_MAIN_LOOP = 150;
 const uint32_t INTERVAL_CONNECTION_CHECK = 10000;
-
-
 
 // ================== СТРУКТУРА ДЛЯ ТАЙМЕРОВ МОДУЛЕЙ ==================
 typedef struct {

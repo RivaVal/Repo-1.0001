@@ -10,6 +10,13 @@
 #include <SPI.h>
 #include "E49_Config.h"
 
+
+
+    //  🛠 БЫСТРОЕ ИСПРАВЛЕНИЕ:
+    //  В файле Eleron_Controller.cpp добавьте определение массива:
+    //  #include "Eleron_Controller.h"
+
+
 // Таблица для быстрого расчета CRC8
 //  static const uint8_t CRC8_TABLE[256] = {
 const uint8_t crc8_table[256] = {
@@ -56,6 +63,11 @@ E49_Controller::E49_Controller(bool isSender, HardwareSerial* serial) :
 //    _lastReconnectAttempt(0),
     _ledState(false),
     _lastLedToggle(0) {
+
+    // Добавить в класс E49_Controller:
+    //  E49_Controller(const E49_Controller&) = delete;
+    //  E49_Controller& operator=(const E49_Controller&) = delete;
+
     
     memset(&_stats, 0, sizeof(_stats));
     _transceiver = new EBYTE(serial, E49_PIN_M0, E49_PIN_M1, E49_PIN_AUX);
@@ -116,8 +128,38 @@ ebyteStatus E49_Controller::init() {
     return EBYTE_SUCCESS;
 }
 
+/*
+// Заменяем блокирующий цикл в waitForAux
+        //bool waitForAux(uint32_t timeout_ms) {
+ebyteStatus waitForAux(uint32_t timeout_ms) {
+    uint32_t start_time = millis();
+    while ((millis() - start_time) < timeout_ms) {
+        if (digitalRead(aux_pin) == HIGH) {
+            return true;
+        }
+        // Уменьшаем блокировку, но сохраняем простоту
+        delay(5);
+        yield(); // Важно для ESP32
+    }
+    return false;
+}
+*/
 
 
+ebyteStatus E49_Controller::waitForAux(uint32_t timeout) {
+    uint32_t startTime = millis();
+    while ((millis() - startTime) < timeout) {
+        if (digitalRead(E49_PIN_AUX) == HIGH) {
+            return  EBYTE_SUCCESS;
+            //return true;
+        }
+        delay(5);
+        yield(); // Важно для ESP32
+    }
+    return EBYTE_ERROR_AUX_TIMEOUT;
+}
+/*  
+// созранил предыдущий вариант
 ebyteStatus E49_Controller::waitForAux(uint32_t timeout) const {
     uint32_t startTime = millis();
     while (digitalRead(E49_PIN_AUX) == LOW) {
@@ -130,6 +172,7 @@ ebyteStatus E49_Controller::waitForAux(uint32_t timeout) const {
     }
     return EBYTE_SUCCESS;
 }
+*/
 
 /* Устаревшая версия
 ebyteStatus E49_Controller::sendData(const DataComSet_t& data) {
@@ -263,7 +306,8 @@ ebyteStatus E49_Controller::sendData(const DataComSet_t& data) {
         DataComSet_t packet = data;
         packet.preamble[0] = 0xAA;
         packet.preamble[1] = 0x55;
-        packet.crc8 = calculateCRC8((uint8_t*)&packet, sizeof(packet) - 1);
+                //  packet.crc8 = calculateCRC8((uint8_t*)&packet, sizeof(packet) - 1);
+        packet.crc8 = calculateCRC8_op((uint8_t*)&packet, sizeof(packet) - 1);
         
         ebyteStatus status = waitForAux(100); // Добавить timeout
         if (status != EBYTE_SUCCESS) {
@@ -344,7 +388,8 @@ ebyteStatus E49_Controller::receiveData(DataComSet_t& data) {
             // Проверка CRC
             uint8_t crc = data.crc8;
             data.crc8 = 0;
-            uint8_t calculated_crc = calculateCRC8((uint8_t*)&data, sizeof(data));
+                    //  uint8_t calculated_crc = calculateCRC8((uint8_t*)&data, sizeof(data));
+            uint8_t calculated_crc = calculateCRC8_op((uint8_t*)&data, sizeof(data));
             
             if (crc != calculated_crc) {
                 _stats.crc_errors++;
@@ -371,6 +416,7 @@ ebyteStatus E49_Controller::receiveData(DataComSet_t& data) {
     return EBYTE_ERROR_NO_NEW_DATA;
 }
 
+
 /* Устаревшая версия кода     
 ebyteStatus E49_Controller::checkConnection() {
     if ( (millis() - _lastActivityTime ) > CONNECTION_TIMEOUT_MS) {
@@ -382,6 +428,23 @@ ebyteStatus E49_Controller::checkConnection() {
     return EBYTE_SUCCESS;
 }
 */
+
+// Упрощаем восстановление связи  E49_Controller::
+        //bool recoverConnection() {
+bool E49_Controller::recoverConnection() {
+    // Простой сброс вместо сложной логики
+    digitalWrite(E49_PIN_M0, HIGH);
+    digitalWrite(E49_PIN_M1, HIGH);
+    delay(20);
+    digitalWrite(E49_PIN_M0, LOW);
+    digitalWrite(E49_PIN_M1, LOW);
+    delay(100);
+    ebyteStatus status = waitForAux();
+            //  return (waitForAux(500) == EBYTE_SUCCESS) ? true : false ;
+            //   return (status == EBYTE_SUCCESS) ? true : false ;
+   return (status == EBYTE_SUCCESS);
+} 
+
 
 // Добавьте метод принудительного восстановления:
 void E49_Controller::forceRecovery() {
@@ -575,7 +638,8 @@ DataComSet_t E49_Controller::createTestPacket() const {
     packet.comParashut = 0;
     packet.timestamp = millis();
     packet.comSetAll = 0b00000001; // Запрос ACK
-    packet.crc8 = calculateCRC8((uint8_t*)&packet, sizeof(packet) - 1);
+            //  packet.crc8 = calculateCRC8((uint8_t*)&packet, sizeof(packet) - 1);
+    packet.crc8 = calculateCRC8_op((uint8_t*)&packet, sizeof(packet) - 1);
     
     return packet;
 }
@@ -626,13 +690,39 @@ void E49_Controller::updateLED() {
     }
 }
 
-uint8_t E49_Controller::calculateCRC8(const uint8_t* data, size_t length) const {
+/*  
+uint8_t E49_Controller::calculateCRC8_OLS(const uint8_t* data, size_t length) const {
     uint8_t crc = 0;
     for (size_t i = 0; i < length; i++) {
         crc = crc8_table[crc ^ data[i]];
     }
     return crc;
 }
+*/
+
+    // Оптимизация через развертывание цикла:
+    //  uint8_t calculateCRC8_optimized(const uint8_t* data, size_t length) const {
+uint8_t E49_Controller::calculateCRC8_op(const uint8_t* data, size_t length) const {
+    uint8_t crc = 0;
+    size_t i = 0;
+    
+    // Обрабатываем по 4 байта за раз
+    for (; i + 3 < length; i += 4) {
+        crc = crc8_table[crc ^ data[i]];
+        crc = crc8_table[crc ^ data[i+1]];
+        crc = crc8_table[crc ^ data[i+2]];
+        crc = crc8_table[crc ^ data[i+3]];
+    }
+    
+    // Остаточные байты
+    for (; i < length; i++) {
+        crc = crc8_table[crc ^ data[i]];
+    }
+    
+    return crc;
+}
+
+
 
 /*  
 ebyteStatus E49_Controller::waitForAux(uint32_t timeout) const {
@@ -655,7 +745,8 @@ ebyteStatus E49_Controller::sendAck(uint16_t packet_id, uint8_t status) {
     ack.preamble[1] = 0xAA;
     ack.packet_id = packet_id;
     ack.status = status;
-    ack.crc8 = calculateCRC8((uint8_t*)&ack, sizeof(ack) - 1);
+            //  ack.crc8 = calculateCRC8((uint8_t*)&ack, sizeof(ack) - 1);
+    ack.crc8 = calculateCRC8_op((uint8_t*)&ack, sizeof(ack) - 1);
     
     ebyteStatus auxStatus = waitForAux();
     if (auxStatus != EBYTE_SUCCESS) {
@@ -680,7 +771,8 @@ ebyteStatus E49_Controller::receiveAck(AckPacket_t& ack) {
             // Проверка CRC
             uint8_t crc = ack.crc8;
             ack.crc8 = 0;
-            uint8_t calculated_crc = calculateCRC8((uint8_t*)&ack, sizeof(ack));
+                    //  uint8_t calculated_crc = calculateCRC8((uint8_t*)&ack, sizeof(ack));
+            uint8_t calculated_crc = calculateCRC8_op((uint8_t*)&ack, sizeof(ack));
             
             if (crc != calculated_crc) {
                 _stats.crc_errors++;

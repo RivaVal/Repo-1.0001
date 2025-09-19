@@ -1,4 +1,5 @@
 
+
 /**
  * @file main_PR_vers_2.ino
  * @brief Основной модуль системы управления БПЛА
@@ -278,5 +279,4 @@ void checkSystemHealth() {
         lastHealthCheck = millis();
     }
 }
-
 

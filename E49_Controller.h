@@ -16,29 +16,6 @@
 
 
 
-/*  
-class BitMask {
-public:
-    BitMask(uint8_t mask = 0) : _mask(mask) {}
-    
-    void setBit(uint8_t bit) { _mask |= (1 << bit); }
-    void clearBit(uint8_t bit) { _mask &= ~(1 << bit); }
-    bool checkBit(uint8_t bit) const { return (_mask & (1 << bit)) != 0; }
-    uint8_t getMask() const { return _mask; }
-    void setMask(uint8_t mask) { _mask = mask; }
-    
-private:
-    uint8_t _mask;
-};
-*/
-//       ----
- //                   class E49_Controller {
- //                   public:
- //                       E49_Controller(bool isReceiver);
- //                       ebyteStatus init();
- //                       void process();
- //                       // ... другие методы ...
- //
 //----------
 class E49_Controller {
 public:
@@ -67,10 +44,18 @@ public:
     bool isConnectionLost() const;
     //void forceRecovery();
     //void printStats() const;
-
+    bool recoverConnection(); 
+    
+    // Добавьте ЭТО в public секцию:
+    E49_Controller(const E49_Controller&) = delete;
+    E49_Controller& operator=(const E49_Controller&) = delete;
+    
+        
 private:
-    uint8_t calculateCRC8(const uint8_t* data, size_t length) const;
-    ebyteStatus waitForAux(uint32_t timeout = AUX_TIMEOUT_MS) const;
+            //  uint8_t calculateCRC8(const uint8_t* data, size_t length) const;
+    uint8_t calculateCRC8_op(const uint8_t* data, size_t length) const;
+                //  ebyteStatus waitForAux(uint32_t timeout = AUX_TIMEOUT_MS) const;
+    ebyteStatus waitForAux(uint32_t timeout = AUX_TIMEOUT_MS);
     ebyteStatus sendAck(uint16_t packet_id, uint8_t status);
     ebyteStatus receiveAck(AckPacket_t& ack);
     void resetModule();
