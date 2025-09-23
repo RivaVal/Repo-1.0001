@@ -20,6 +20,33 @@ size_t SDHandler::buffer_index = 0;
 uint32_t SDHandler::write_count = 0;
 uint32_t SDHandler::error_count = 0;
 
+
+
+
+// SD_Handler.cpp  
+bool SDHandler::begin() {
+    if (!SPIManager::acquireForSD(100)) {
+        return false;
+    }
+
+    SPIManager::getSPI().beginTransaction(SPISettings(25000000, MSBFIRST, SPI_MODE0));
+    bool success = SD.begin(SPI_SD_CS);
+    
+    if (success) {
+        if (!SD.exists("/data")) SD.mkdir("/data");
+        char filename[32];
+        snprintf(filename, sizeof(filename), "/data/data_%lu.bin", millis());
+        data_file = SD.open(filename, FILE_WRITE);
+        success = !!data_file;
+    }
+    
+    SPIManager::getSPI().endTransaction();
+    SPIManager::release();
+    
+    return success;
+}
+
+        /*  
 bool SDHandler::begin() {
     if (!SPIManager::acquireForSD(100)) {
         Serial.println("❌ Failed to acquire SPI for SD");
@@ -27,7 +54,7 @@ bool SDHandler::begin() {
     }
 
     SPIManager::getSPI().beginTransaction(SPISettings(25000000, MSBFIRST, SPI_MODE0));
-    sd_initialized = SD.begin(E49_SD_CS);
+    sd_initialized = SD.begin(SPI_SD_CS);
     
     if (sd_initialized) {
         // Создаем директорию для данных
@@ -58,6 +85,8 @@ bool SDHandler::begin() {
     
     return sd_initialized;
 }
+*/
+
 
 bool SDHandler::writeData(const SensorData& data) {
     if (!sd_initialized) return false;
@@ -173,3 +202,4 @@ void SDHandler::end() {
 float SDHandler::getSuccessRate() {
     return (write_count > 0) ? (100.0f * (write_count - error_count) / write_count) : 100.0f;
 }
+

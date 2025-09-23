@@ -1,18 +1,18 @@
 
 
 
-    //=========================================================
-    //  Eleron_Controller.h 
-    //===========================================================
-    //  📋 Полная исправленная версия:
-    //  Eleron_Controller.h
-    //  cpp
-
+//=========================================================
+//  Eleron_Controller.h 
+//===========================================================
+//  📋 Полная исправленная версия:
+//  Eleron_Controller.h
+//
 #pragma once
 #include <Arduino.h>
-#include "E49_Config.h"
-        //  #include "servo_config.h"
+#include "Config.h"
+                //  #include "servo_config.h"
 
+// Eleron_Controller.h - исправить объявление
 class EleronController {
 private:
     static const uint32_t UPDATE_INTERVAL = 20;
@@ -36,4 +36,5 @@ private:
     static void processIMUData(const SensorData& data);
     static void setServoAngle(uint8_t channel, int angle);
     static void runTestSequence();
+    static void smoothServoMovement();
 };

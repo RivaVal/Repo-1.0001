@@ -15,7 +15,7 @@
 
 #include <Arduino.h>
 #include "motor_controller.h"
-
+#include "Config.h"
 MotorController motor_controller;
 
 MotorController::MotorController() 

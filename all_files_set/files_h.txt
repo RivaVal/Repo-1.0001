@@ -1,0 +1,643 @@
+
+
+//========================================
+//  Шаг 2: Создаем файл CommonTypes.h
+//========================================
+// CommonTypes.h
+#pragma once
+
+#include <Arduino.h>
+#include <cstdint>
+
+// ================== СТРУКТУРЫ ДАННЫХ ==================
+#pragma pack(push, 1)
+
+// Структура передаваемых данных
+struct DataComSet_t {
+    uint8_t  preamble[2];    // 0xAA 0x55
+    uint16_t packet_id;      // Счетчик пакетов
+    uint8_t  comUp;          // 0-255
+    uint8_t  comLeft;        // 0-255
+    uint16_t comThrottle;    // 1000-2000
+    uint8_t  comParashut;    // 0/1
+    uint32_t timestamp;      // Время из millis()
+    uint8_t  comSetAll;      // Битовая маска
+    uint8_t  crc8;           // Контрольная сумма
+};
+
+// Структура подтверждения передачи
+struct AckPacket_t {
+    uint8_t preamble[2];        // 0x55 0xAA
+    uint16_t packet_id;         // ID подтверждаемого пакета
+    uint32_t timestamp;         // Время отправки пакета
+    uint8_t status;             // Статус получения
+    uint8_t crc8;               // Контрольная сумма
+};
+
+// Структура для данных сенсора ICM-20948
+struct SensorData {
+    uint32_t timestamp;
+    float accel[3];      // x, y, z акселерометр (g)
+    float gyro[3];       // x, y, z гироскоп (dps)
+    float mag[3];        // x, y, z магнитометр (uT)
+    float euler[3];      // roll, pitch, yaw углы (градусы)
+    float quat[4];       // кватернион
+    uint8_t status;      // статус DMP
+};
+
+// Статистика работы модуля
+struct ModuleStats_t {
+    uint32_t tx_packets;
+    uint32_t rx_packets;
+    uint32_t crc_errors;
+    uint32_t tx_errors;
+    uint32_t rx_errors;
+    int16_t last_rssi;
+    uint32_t resets;
+    uint32_t reconnects;
+    uint32_t aux_timeouts;
+    uint32_t busy_errors;
+    uint32_t not_ready_errors;
+    uint32_t connection_lost_events;
+    uint32_t receive_timeouts;
+    uint16_t preamble_errors;
+};
+
+#pragma pack(pop)
+
+// ================== ПЕРЕЧИСЛЕНИЯ ==================
+// Состояния системы
+enum class SystemState {
+    BOOT,           // Загрузка
+    INITIALIZING,   // Инициализация
+    STANDBY,        // Ожидание
+    ACTIVE,         // Активная работа
+    ERROR,          // Ошибка
+    RECOVERY        // Восстановление
+};
+
+// Статус операций модуля E49
+enum class EbyteStatus {
+    SUCCESS,
+    ERROR_INIT,
+    ERROR_SEND,
+    ERROR_RECEIVE,
+    ERROR_CRC,
+    ERROR_AUX_TIMEOUT,
+    ERROR_NO_NEW_DATA,
+    ERROR_INVALID_DATA,
+    ERROR_INVALID_PREAMBLE,
+    ERROR_PREAMBLE,
+    ERROR_SEND_FAILED,
+    ERROR_RECEIVE_FAILED,
+    ERROR_MODULE_NOT_RESPONDING,
+    ERROR_INVALID_STATE,
+    ERROR_BUSY,
+    ERROR_NOT_READY,
+    ERROR_CONNECTION_LOST
+};
+/*
+// Добавить более детализированные коды ошибок
+enum class EbyteStatus {
+    SUCCESS,
+    ERROR_AUX_TIMEOUT,
+    ERROR_CRC,
+    ERROR_PREAMBLE,
+    ERROR_SEND_FAILED,
+    ERROR_RECEIVE_FAILED,
+    ERROR_MODULE_NOT_RESPONDING,
+    ERROR_INVALID_STATE
+    // ...
+};
+*/
+
+// ================== ВСПОМОГАТЕЛЬНЫЙ КЛАСС ==================
+// Класс для работы с битовой маской
+class BitMask {
+private:
+    uint8_t mask;
+public:
+    BitMask() : mask(0) {}
+    explicit BitMask(uint8_t initialMask) : mask(initialMask) {}
+    
+    void setBit(uint8_t bit, bool value) {
+        if (bit > 7) return;
+        if (value) {
+            mask |= (1 << bit);
+        } else {
+            mask &= ~(1 << bit);
+        }
+    }
+    
+    bool getBit(uint8_t bit) const {
+        if (bit > 7) return false;
+        return (mask & (1 << bit)) != 0;
+    }
+
+    uint8_t getMask() const { return mask; }
+    void setMask(uint8_t newMask) { mask = newMask; }
+};
+
+
+// Config.h
+#pragma once
+//=======================================
+//  Шаг 1: Создаем файл Config.h
+//=======================================
+
+#include <Arduino.h>
+#include <driver/ledc.h>
+#include "CommonTypes.h"  // ← ДОБАВИТЬ ЭТУ СТРОКУ
+
+// ================== КОНФИГУРАЦИЯ ПИНОВ ==================
+// Пины модуля E49
+constexpr uint8_t E49_PIN_RX = 16;
+constexpr uint8_t E49_PIN_TX = 17;
+constexpr uint8_t E49_PIN_M0 = 4;
+constexpr uint8_t E49_PIN_M1 = 21;
+constexpr uint8_t E49_PIN_AUX = 5;
+
+// SPI пины
+constexpr uint8_t SPI_ICM_CS  = 22;
+constexpr uint8_t SPI_SD_CS   = 33;
+constexpr uint8_t SPI_ICM_INT = 32;
+constexpr uint8_t LED_PIN = 2;
+
+// SPI пины по умолчанию
+constexpr uint8_t VSPI_SCLK = 18;
+constexpr uint8_t VSPI_MISO = 19;
+constexpr uint8_t VSPI_MOSI = 23;
+
+// Конфигурация сервоприводов
+constexpr int servoPins[] = {12, 13, 14, 27, 26};
+constexpr ledc_channel_t servoChannels[] = {
+    LEDC_CHANNEL_0,
+    LEDC_CHANNEL_1,
+    LEDC_CHANNEL_2,
+    LEDC_CHANNEL_3,
+    LEDC_CHANNEL_4
+};
+
+// ================== ПАРАМЕТРЫ СВЯЗИ E49 ==================
+constexpr uint32_t E49_BAUDRATE = 9600;
+constexpr uint8_t E49_ADDRESS_H = 1;
+constexpr uint8_t E49_ADDRESS_L = 101;
+constexpr uint8_t E49_CHANNEL = 0x17;
+
+// ================== ТАЙМАУТЫ И ИНТЕРВАЛЫ ==================
+constexpr uint16_t AUX_TIMEOUT_MS = 300;
+constexpr uint16_t ACK_TIMEOUT_MS = 500;
+constexpr uint16_t RECEIVE_TIMEOUT_MS = 1000;
+constexpr uint32_t RECONNECT_INTERVAL_MS = 2000;
+constexpr uint32_t CONNECTION_TIMEOUT_MS = 5000;
+constexpr uint8_t MAX_RETRIES = 3;
+
+constexpr uint32_t LED_BLINK_INTERVAL_MS = 100;
+constexpr uint32_t STATS_INTERVAL_MS = 15000;
+
+// ================== ПАРАМЕТРЫ ПАКЕТОВ ==================
+constexpr uint8_t CRC8_POLYNOMIAL = 0x07;
+constexpr uint8_t PACKET_PREAMBLE_1 = 0xAA;
+constexpr uint8_t PACKET_PREAMBLE_2 = 0x55;
+constexpr uint8_t ACK_PREAMBLE_1 = 0x55;
+constexpr uint8_t ACK_PREAMBLE_2 = 0xAA;
+constexpr uint8_t COM_SETALL_MASK = 0b00000001;
+
+// ================== РАЗМЕРЫ СТРУКТУР ==================
+constexpr uint8_t DATA_COM_SET_SIZE = 19; // sizeof(DataComSet_t)
+constexpr uint8_t ACK_PACKET_SIZE = 11;   // sizeof(AckPacket_t)
+
+// ================== СИСТЕМНЫЕ НАСТРОЙКИ ==================
+constexpr uint32_t STATUS_UPDATE_INTERVAL = 5000;
+constexpr uint32_t ICM_READ_INTERVAL = 20;
+constexpr uint32_t SD_WRITE_INTERVAL = 100;
+constexpr uint32_t RADIO_PROCESS_INTERVAL = 50;
+constexpr uint32_t ERROR_CHECK_INTERVAL = 1000;
+
+//===========================================================
+
+extern int servoAngles[5];
+extern int servoTargetAngles[5];
+
+        // GlobalVars.cpp:
+        //      #include "GlobalVars.h"
+int angles[5] = {90, 90, 90, 90, 0};
+int targetAngles[5] = {90, 90, 90, 90, 0};
+
+
+
+
+//====================================================================
+//	2. Файл E49_Controller.h
+//====================================================================
+//  2. Обновленный E49_Controller.h
+//
+
+#ifndef E49_CONTROLLER_H
+#define E49_CONTROLLER_H
+
+#include <Arduino.h>
+#include <HardwareSerial.h>
+#include <EBYTE.h>
+//  #include "Config.h"
+#include "Config.h"  // ← ИЗМЕНИТЬ С E49_Config.h на Config.h
+
+
+class E49_Controller {
+public:
+    // Состояния конечного автомата
+    enum class InternalState {
+        IDLE,
+        WAITING_FOR_AUX,
+        SENDING_DATA,
+        WAITING_FOR_ACK,
+        RECEIVING_DATA,
+        PROCESSING_DATA,
+        SENDING_ACK,
+        RESETTING,
+        ERROR
+    };
+
+    E49_Controller(bool isSender, HardwareSerial* serial = &Serial2);
+    ~E49_Controller();
+    
+    // Удаляем конструктор копирования и присваивания
+    E49_Controller(const E49_Controller&) = delete;
+    E49_Controller& operator=(const E49_Controller&) = delete;
+
+    EbyteStatus init();
+    EbyteStatus sendData(const DataComSet_t& data);
+    EbyteStatus receiveData(DataComSet_t& data);
+    EbyteStatus checkConnection();
+    EbyteStatus reinitialize();
+    void process();
+    
+    // Неблокирующие методы
+    EbyteStatus startSendingData(const DataComSet_t& data);
+    EbyteStatus startReceivingData();
+    
+    // Вспомогательные методы
+    DataComSet_t createTestPacket() const;
+    void printStats() const;
+    void printStatus(EbyteStatus status) const;
+    void enableDebug(bool enable);
+    void forceRecovery();
+    
+    // Геттеры
+    InternalState getInternalState() const { return _internalState; }
+    bool isConnectionLost() const;
+    const ModuleStats_t& getStats() const { return _stats; }
+    
+private:
+    // Внутренние методы
+    uint8_t calculateCRC8(const uint8_t* data, size_t length) const;
+    EbyteStatus waitForAux(uint32_t timeout = AUX_TIMEOUT_MS);
+    EbyteStatus sendAck(uint16_t packet_id, uint8_t status);
+    EbyteStatus receiveAck(AckPacket_t& ack);
+    void resetModule();
+    bool attemptRecovery();
+    bool testCommunication();
+    void handleConnectionRecovery();
+    void updateLED();
+    void changeState(InternalState newState);
+    
+    // Поля класса
+    EBYTE* _transceiver;
+    bool _isSender;
+    bool _debugEnabled;
+    ModuleStats_t _stats;
+    uint32_t _lastActivityTime;
+    uint32_t _lastReconnectAttempt;
+    bool _ledState;
+    uint32_t _lastLedToggle;
+    
+    // Конечный автомат
+    InternalState _internalState;
+    uint32_t _stateStartTime;
+    DataComSet_t _currentTxPacket;
+    DataComSet_t _currentRxPacket;
+    AckPacket_t _currentAckPacket;
+    uint8_t _currentRetry;
+    
+    // ... существующие поля
+    uint32_t _lastResetTime;
+    uint32_t _lastSaveTime;    
+};
+
+#endif // E49_CONTROLLER_H
+
+
+
+
+//=========================================================
+//  Eleron_Controller.h 
+//===========================================================
+//  📋 Полная исправленная версия:
+//  Eleron_Controller.h
+//
+#pragma once
+#include <Arduino.h>
+#include "Config.h"
+                //  #include "servo_config.h"
+
+// Eleron_Controller.h - исправить объявление
+class EleronController {
+private:
+    static const uint32_t UPDATE_INTERVAL = 20;
+    static uint32_t last_update_time;
+    static int current_angles[5];
+    static bool test_running;
+    static uint32_t test_start_time;
+    static uint8_t test_phase;
+
+public:
+    static void begin();
+    static void update(const SensorData& data);
+    static const int* getCurrentAngles() { return current_angles; }
+    
+    static void setNeutralPosition();
+    static void startTestSequence();
+    static void stopTestSequence();
+    static bool isTestRunning() { return test_running; }
+
+private:
+    static void processIMUData(const SensorData& data);
+    static void setServoAngle(uint8_t channel, int angle);
+    static void runTestSequence();
+    static void smoothServoMovement();
+};
+
+    //============================================
+    //   3. Исправленный ICM_Handler.h
+    //============================================
+    //  🚀 Улучшения с буферизацией данных:
+    //  5. ICM_Handler.h - Добавляем буферизацию
+    //  cpp
+
+#pragma once
+#include <Arduino.h>
+#include <SPI.h>
+#include <cstdint>
+#include "Config.h"
+#include "SPI_Manager.h"
+
+class ICMHandler {
+private:
+    static const uint32_t READ_INTERVAL = 20;
+    static const size_t BUFFER_SIZE = 100; // Буфер на 100 измерений
+    
+    static uint32_t last_read_time;
+    static SensorData current_data;
+    static uint32_t read_count;
+    static uint32_t error_count;
+    
+    // Буфер для хранения данных перед записью на SD
+    static SensorData data_buffer[BUFFER_SIZE];
+    static size_t buffer_index;
+    static bool buffer_overflow;
+
+public:
+    static bool begin();
+    static bool readData();
+    static const SensorData& getData();
+    static bool isDataFresh();
+    static uint32_t getReadCount();
+    static uint32_t getErrorCount();
+    
+    // Методы для работы с буфером
+    static bool addToBuffer(const SensorData& data);
+    static size_t getBufferSize() { return buffer_index; }
+    static bool isBufferFull() { return buffer_index >= BUFFER_SIZE; }
+    static bool isBufferOverflow() { return buffer_overflow; }
+    static const SensorData* getBuffer() { return data_buffer; }
+    static void clearBuffer() { buffer_index = 0; buffer_overflow = false; }
+    
+    // Статистика буфера
+    static size_t getBufferCapacity() { return BUFFER_SIZE; }
+    static float getBufferUsage() { return (float)buffer_index / BUFFER_SIZE * 100.0f; }
+};
+
+//=============================================================================
+//==============    ( motor_controller.h )  ===================================
+//=============================================================================
+
+
+
+
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//  ПРИВЕТ!! Окружение: Arduino IDE, микроконтроллер esp32, моторы без драйверов, 
+//  управляются напрямую от ESP32 , используются два пина для двух моторов: GPIO25 для 
+//  мотора_А и GPIO26 для мотора_Б ,моторы питаются через регулятор скорости BLHeli 
+//  EMAX ESC от источника питания: 21V, 6500 mAh    Прошу  проанализировать код 
+//  проекта из github, прошу на основе уже существующих мождулей, дать вариант МОДУЛЯ 
+//  управления двумя моторами при движении моторов в одну сторону: QX Motor QF(2827) 2227-1800KV 
+//  без драйвера, на основе последней актуальной версии mcpwm, НУЖЕН вариант кода, который 
+//  можно вписать в существующню структуру проекта! Прошу дать вариант кода с полной 
+//  документацией и подробным описанием, а так же добавить код для тестового прогона 
+//  двигателей:
+//  1.Последовательность работы при тестовом прогоне:
+//  2. Плавный старт моторов до тестового уровня
+//  3. Работа на тестовом уровне в течение 4 минут
+//  4. Плавная остановка моторов !
+//  
+//  Привет! Проанализировал ваш проект. Вот модуль для управления моторами через 
+//  ESC с тестовым прогоном:
+//  Модуль управления моторами через ESC (motor_controller.h)
+//  
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//  / * *
+//   * Модуль для управления двумя моторами QX Motor QF(2827) 2227-1800KV
+//   * через ESC регуляторы BLHeli EMAX с использованием нового MCPWM Prelude API.
+//   * Только движение в одну сторону.
+//   * Версия: 2.0.0 (с актуальным MCPWM Prelude)
+//   * 
+//   * Подключение: 
+//   * - GPIO25 -> ESC мотора A
+//   * - GPIO26 -> ESC мотора B  
+//   * Питание: 21V, 6500mAh
+//  
+//   * /
+//   *   ( motor_controller.h )
+//   *
+//   *
+//   * Только движение в одну сторону.
+//   * Версия: 2.0.1 (исправлены предупреждения инициализации)
+//   * /
+//==============================================================
+//	📄 motor_controller.h (исправленный)
+//==============================================================
+//  📄 motor_controller.h (единый файл)
+//==============================================================
+//📄 motor_controller.h (исправленная версия)
+//==============================================================  
+
+#ifndef MOTOR_CONTROLLER_H
+#define MOTOR_CONTROLLER_H
+
+#include <Arduino.h>
+#include <driver/mcpwm_prelude.h>
+
+class MotorController {
+private:
+    // Конфигурация пинов ESC
+    static const uint8_t ESC_A_PIN = 25;
+    static const uint8_t ESC_B_PIN = 26;
+    
+    // Параметры ESC
+    static const int ESC_MIN_US = 1000;
+    static const int ESC_MAX_US = 2000;
+    static const int PWM_FREQUENCY = 50;
+    
+    // Параметры тестового прогона
+    static const int TEST_SPEED_PERCENT = 70;
+    static const int TEST_DURATION_SEC = 240;
+    
+    // MCPWM объекты
+    mcpwm_timer_handle_t timer_a = nullptr;
+    mcpwm_timer_handle_t timer_b = nullptr;
+    mcpwm_oper_handle_t oper_a = nullptr;
+    mcpwm_oper_handle_t oper_b = nullptr;
+    mcpwm_cmpr_handle_t comparator_a = nullptr;
+    mcpwm_cmpr_handle_t comparator_b = nullptr;
+    mcpwm_gen_handle_t generator_a = nullptr;
+    mcpwm_gen_handle_t generator_b = nullptr;
+    
+    // Текущие скорости моторов
+    int current_speed_a;
+    int current_speed_b;
+    
+    // Флаги состояния
+    bool is_test_running;
+    unsigned long test_start_time;
+    unsigned long last_report_time;
+    
+    // Приватные методы
+    void init_mcpwm_components();
+    void setup_generator_actions();
+    void safe_delete(mcpwm_timer_handle_t& handle);
+    void safe_delete(mcpwm_oper_handle_t& handle);
+    void safe_delete(mcpwm_cmpr_handle_t& handle);
+    void safe_delete(mcpwm_gen_handle_t& handle);
+    
+    int percent_to_us(int speed_percent) const;
+    uint32_t us_to_ticks(int us) const;
+    bool set_motor_speed(char motor_id, int speed_percent);
+    void ramp_speed(int target_speed, float duration);
+
+public:
+    MotorController();
+    ~MotorController();
+    
+    bool init_esc();
+    bool set_motors_speed(int speed, float ramp_time = 0);
+    void stop_motors(float ramp_time = 0);
+    bool start_test_sequence();
+    void stop_test_sequence();
+    String get_motors_status() const;
+    bool is_test_active() const;
+    void update();
+};
+
+extern MotorController motor_controller;
+
+#endif
+
+
+    //=======================================================
+    //  3. МОДУЛЬ №3: SD Card Handler (SD_Handler.h)
+    //=======================================================
+    //  cpp
+    //
+    //  🚀 Улучшения с буферизацией и проверкой места:
+    //  5. SD_Handler.h - Полная версия с буфером
+    //cpp
+
+#pragma once
+#include "SPI_Manager.h"
+#include "Config.h"
+#include <SD.h>
+
+class SDHandler {
+private:
+    static const uint32_t WRITE_INTERVAL = 500;
+    static const size_t BUFFER_SIZE = 2048; // 2KB буфер
+    static const uint32_t MIN_FREE_SPACE = 1024 * 1024; // 1MB минимально свободного места
+    
+    static uint32_t last_write_time;
+    static uint32_t last_flush_time;
+    static File data_file;
+    static bool sd_initialized;
+    
+    // Буферизация данных
+    static uint8_t write_buffer[BUFFER_SIZE];
+    static size_t buffer_index;
+    static uint32_t write_count;
+    static uint32_t error_count;
+
+public:
+    static bool begin();
+    static bool writeData(const SensorData& data);
+    static void end();
+    static bool isInitialized() { return sd_initialized; }
+    
+    // Буферизация
+    static bool flushBuffer();
+    
+    // Проверка свободного места
+    static bool checkFreeSpace();
+    static uint64_t getFreeSpace();
+    
+    // Статистика
+    static uint32_t getWriteCount() { return write_count; }
+    static uint32_t getErrorCount() { return error_count; }
+    static float getSuccessRate();
+};
+
+
+//====================================================================
+//	2. Файл SPI_Manager.h
+//====================================================================
+//  Как и требовалось, нужно добавить тесты.
+//  Улучшенная реализация
+//  1. Исправленный SPI_Manager.h
+//
+#pragma once
+#include <Arduino.h>
+#include <SPI.h>
+#include "Config.h"
+
+class SPIManager {
+private:
+    static bool spi_busy;
+    static uint32_t last_operation_time;
+    static uint8_t current_cs_pin;
+
+public:
+    static bool begin();
+    static bool acquireForICM(uint32_t timeout = 5);
+    static bool acquireForSD(uint32_t timeout = 50);
+    static void release();
+    static SPIClass& getSPI() { return SPI; }
+    static bool isBusy() { return spi_busy; }
+    static uint32_t getLastOpTime() { return last_operation_time; }
+
+private:
+    static bool acquireSPI(uint8_t cs_pin, uint32_t timeout);
+};
+
+
+//=====================================
+//`Исправленный GlobalVars.h:
+//=====================================
+
+#pragma once
+
+// GlobalVars.h
+extern int servoAngles[5];
+extern int servoTargetAngles[5];
+
+//=======================================

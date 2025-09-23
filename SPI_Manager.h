@@ -4,43 +4,20 @@
 //====================================================================
 //	2. Файл SPI_Manager.h
 //====================================================================
-
-
-
+//  Как и требовалось, нужно добавить тесты.
+//  Улучшенная реализация
+//  1. Исправленный SPI_Manager.h
+//
 #pragma once
 #include <Arduino.h>
 #include <SPI.h>
-#include <cstdint>          // Добавить для uint32_t
-#include "E49_Config.h"     // Добавить для SensorData
-#pragma once
-#include <Arduino.h>
-#include <SPI.h>
-#include <cstdint>
-
-// Временно отключим конфликтующие макросы
-#ifdef ICM_CS
-#undef ICM_CS
-#endif
-
-#ifdef SD_CS  
-#undef SD_CS
-#endif
-
-// Используем новые имена из E49_Config.h
-static const uint8_t SPI_ICM_CS = E49_ICM_CS;  // Используем макросы
-static const uint8_t SPI_SD_CS = E49_SD_CS;    // Используем макросы
+#include "Config.h"
 
 class SPIManager {
 private:
-    // Переименуем переменные чтобы избежать конфликтов
-    static const uint8_t SPI_SCK  = 18;
-    static const uint8_t SPI_MISO = 19;
-    static const uint8_t SPI_MOSI = 23;
-    static const uint8_t SPI_ICM_CS = 22;  // Переименовано!
-    static const uint8_t SPI_SD_CS = 33;   // Переименовано!
-
     static bool spi_busy;
     static uint32_t last_operation_time;
+    static uint8_t current_cs_pin;
 
 public:
     static bool begin();
@@ -54,3 +31,4 @@ public:
 private:
     static bool acquireSPI(uint8_t cs_pin, uint32_t timeout);
 };
+

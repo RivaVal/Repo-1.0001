@@ -1,10 +1,10 @@
 
-/**
- * @file main_PR_vers_2.ino
+/**================================================
+ * @file ESP32_Air_Plane_0001.ino
  * @brief Основной модуль системы управления БПЛА
  * @version 2.0
  * @date 2024
- * 
+ *================================================
  * Система включает:
  * - Радиомодуль E49 для приема команд
  * - IMU ICM-20948 для навигации
@@ -20,26 +20,12 @@
 #include "SD_Handler.h"
 #include "Eleron_Controller.h"
 #include "E49_Controller.h"
-#include "E49_Config.h"
+#include "Config.h"
 
 // ================== СИСТЕМНЫЕ НАСТРОЙКИ ==================
-constexpr uint32_t STATUS_UPDATE_INTERVAL = 5000;    // 5 сек
-constexpr uint32_t ICM_READ_INTERVAL = 20;           // 50Hz
-constexpr uint32_t SD_WRITE_INTERVAL = 100;          // 10Hz
-constexpr uint32_t RADIO_PROCESS_INTERVAL = 50;      // 20Hz
-constexpr uint32_t ERROR_CHECK_INTERVAL = 1000;      // 1Hz
-
 
 
 // ================== СИСТЕМНЫЕ ПЕРЕМЕННЫЕ ==================
-enum class SystemState {
-    BOOT,           // Загрузка
-    INITIALIZING,   // Инициализация
-    STANDBY,        // Ожидание
-    ACTIVE,         // Активная работа
-    ERROR,          // Ошибка
-    RECOVERY        // Восстановление
-};
 
 SystemState systemState = SystemState::BOOT;
 SystemState previousState = SystemState::BOOT;
@@ -52,6 +38,7 @@ E49_Controller radioReceiver(false, &Serial2);
 
 // ================== ПРОТОТИПЫ ФУНКЦИЙ ==================
 void initializeSystem();
+void initializeAllPins();
 void handleSystemState();
 void processSensors();
 void handleRadioCommunication();
@@ -65,24 +52,59 @@ void checkSystemHealth();
 
 // ================== ОСНОВНЫЕ ФУНКЦИИ ==================
 
+//  1. Добавьте функцию инициализации пинов в setup():
+void initializeAllPins() {
+  // Пины EBYTE
+  pinMode(E49_PIN_M0, OUTPUT);
+  pinMode(E49_PIN_M1, OUTPUT);
+  pinMode(E49_PIN_AUX, INPUT);
+
+  // SPI пины
+  pinMode(VSPI_SCLK, OUTPUT);
+  pinMode(VSPI_MISO, INPUT);
+  pinMode(VSPI_MOSI, OUTPUT);
+  pinMode(SPI_ICM_CS, OUTPUT);
+  pinMode(SPI_SD_CS, OUTPUT);
+  // Дополнительные пины
+  pinMode(SPI_ICM_INT, INPUT);
+
+  // Пины сервоприводов
+  for (int i = 0; i < 5; i++) {
+    pinMode(servoPins[i], OUTPUT);
+  }
+
+  // Светодиод
+  pinMode(LED_PIN, OUTPUT);
+
+
+  Serial.println("All pins initialized");
+}  // end  initializeAllPins()
+
+
+
+
 void setup() {
+    initializeAllPins();
+
     Serial.begin(115200);
     Serial2.begin(9600, SERIAL_8N1, E49_PIN_RX, E49_PIN_TX);
     
-    delay(1000);
+            // handleRadioCommunication();
     Serial.println("\n=== СИСТЕМА УПРАВЛЕНИЯ БПЛА ===");
     Serial.println("Версия 2.0 - Запуск...");
     
     initializeSystem();
     systemStartTime = millis();
+
+    delay(1000);
 }
 
 void loop() {
+    static uint32_t loopStart = millis();
     uint32_t currentTime = millis();
-    
+    handleRadioCommunication() ;
     handleSystemState();
     processSensors();
-    handleRadioCommunication();
     controlOutputs();
     logTelemetry();
     updateSystemStatus();
@@ -93,14 +115,31 @@ void loop() {
     if (processingTime < 10) {
         delay(10 - processingTime);
     }
+
+    // Добавить проверку времени выполнения
+    uint32_t loopTime = millis() - loopStart;
+    if (loopTime > 50) {  // Предупреждение если цикл > 50мс
+        Serial.printf("⚠️ Long loop time: %lumS\n", loopTime);
+    }
+
 }
 
 // ================== РЕАЛИЗАЦИЯ ФУНКЦИЙ ==================
-
 void initializeSystem() {
     systemState = SystemState::INITIALIZING;
-    Serial.println("Инициализация модулей...");
+    Serial.println("🔄 Инициализация модулей...");
     
+    // bool allOk = true;
+
+//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! 
+    // Добавьте таймаут инициализации
+    uint32_t initStart = millis();
+    while (!ICMHandler::begin() && (( millis() - initStart) < 10000)) {
+        Serial.println("⚠️ Retrying ICM initialization...");
+        delay(1000);
+    }
+//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
     // 1. Инициализация SPI
     SPIManager::begin();
     Serial.println("SPI менеджер: OK");
@@ -126,7 +165,7 @@ void initializeSystem() {
     Serial.println("Сервоприводы: OK");
     
     // 5. Инициализация радиомодуля
-    if (radioReceiver.init() == EBYTE_SUCCESS) {
+    if (radioReceiver.init() == EbyteStatus::SUCCESS) {
         Serial.println("Радиомодуль: OK");
     } else {
         Serial.println("Радиомодуль: ERROR");
@@ -191,7 +230,8 @@ void handleRadioCommunication() {
     static uint32_t lastRadioProcess = 0;
     
     if (millis() - lastRadioProcess >= RADIO_PROCESS_INTERVAL) {
-        radioReceiver.process();
+        radioReceiver.process(); // Будет обрабатывать состояние автомата
+        //  radioReceiver.process();
         lastRadioProcess = millis();
     }
 }
@@ -240,7 +280,7 @@ void systemRecovery() {
     SDHandler::end();
     delay(1000);
     
-    if (ICMHandler::begin() && radioReceiver.init() == EBYTE_SUCCESS) {
+    if (ICMHandler::begin() && radioReceiver.init() == EbyteStatus::SUCCESS) {
         systemState = SystemState::STANDBY;
         Serial.println("Восстановление успешно!");
     } else {
@@ -256,6 +296,8 @@ void printStatusReport() {
     Serial.printf("Ошибок: %lu\n", errorCount);
     Serial.printf("Память: %lu байт\n", ESP.getFreeHeap());
     Serial.printf("Чтения IMU: %lu\n", ICMHandler::getReadCount());
+    Serial.printf("Radio State: %d\n", static_cast<int>(radioReceiver.getInternalState()));
+
     Serial.println("======================");
 }
 

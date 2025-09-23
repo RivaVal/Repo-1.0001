@@ -11,7 +11,7 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <cstdint>
-#include "E49_Config.h"
+#include "Config.h"
 #include "SPI_Manager.h"
 
 class ICMHandler {

@@ -12,7 +12,7 @@
 
 #pragma once
 #include "SPI_Manager.h"
-#include "E49_Config.h"
+#include "Config.h"
 #include <SD.h>
 
 class SDHandler {

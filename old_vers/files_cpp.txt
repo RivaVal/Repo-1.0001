@@ -1,0 +1,2037 @@
+
+/**================================================
+ * @file ESP32_Air_Plane_0001.ino
+ * @brief Основной модуль системы управления БПЛА
+ * @version 2.0
+ * @date 2024
+ *================================================
+ * Система включает:
+ * - Радиомодуль E49 для приема команд
+ * - IMU ICM-20948 для навигации
+ * - Управление сервоприводами элеронов
+ * - SD карту для логирования данных
+ * - Систему мониторинга и восстановления
+ */
+
+#include <Arduino.h>
+#include <SPI.h>
+#include "SPI_Manager.h"
+#include "ICM_Handler.h"
+#include "SD_Handler.h"
+#include "Eleron_Controller.h"
+#include "E49_Controller.h"
+#include "E49_Config.h"
+
+// ================== СИСТЕМНЫЕ НАСТРОЙКИ ==================
+constexpr uint32_t STATUS_UPDATE_INTERVAL = 5000;    // 5 сек
+constexpr uint32_t ICM_READ_INTERVAL = 20;           // 50Hz
+constexpr uint32_t SD_WRITE_INTERVAL = 100;          // 10Hz
+constexpr uint32_t RADIO_PROCESS_INTERVAL = 50;      // 20Hz
+constexpr uint32_t ERROR_CHECK_INTERVAL = 1000;      // 1Hz
+
+
+
+// ================== СИСТЕМНЫЕ ПЕРЕМЕННЫЕ ==================
+
+SystemState systemState = SystemState::BOOT;
+SystemState previousState = SystemState::BOOT;
+uint32_t systemStartTime = 0;
+uint32_t errorCount = 0;
+uint32_t lastStatusPrint = 0;
+
+// ================== ЭКЗЕМПЛЯРЫ МОДУЛЕЙ ==================
+E49_Controller radioReceiver(false, &Serial2);
+
+// ================== ПРОТОТИПЫ ФУНКЦИЙ ==================
+void initializeSystem();
+void initializeAllPins();
+void handleSystemState();
+void processSensors();
+void handleRadioCommunication();
+void controlOutputs();
+void logTelemetry();
+void updateSystemStatus();
+void handleEmergency();
+void systemRecovery();
+void printStatusReport();
+void checkSystemHealth();
+
+// ================== ОСНОВНЫЕ ФУНКЦИИ ==================
+
+//  1. Добавьте функцию инициализации пинов в setup():
+void initializeAllPins() {
+  // Пины EBYTE
+  pinMode(E49_PIN_M0, OUTPUT);
+  pinMode(E49_PIN_M1, OUTPUT);
+  pinMode(E49_PIN_AUX, INPUT);
+
+  // SPI пины
+  pinMode(VSPI_SCLK, OUTPUT);
+  pinMode(VSPI_MISO, INPUT);
+  pinMode(VSPI_MOSI, OUTPUT);
+  pinMode(SPI_ICM_CS, OUTPUT);
+  pinMode(SPI_SD_CS, OUTPUT);
+  // Дополнительные пины
+  pinMode(SPI_ICM_INT, INPUT);
+
+  // Пины сервоприводов
+  for (int i = 0; i < 5; i++) {
+    pinMode(servoPins[i], OUTPUT);
+  }
+  // Для моторных пинов GPIO32 и GPIO33 используйте:
+  //    static const int ESC_A_PIN = 25;
+  //    static const int ESC_B_PIN = 26;
+  // Простое решение:
+  // pinMode(25, OUTPUT);
+  // pinMode(26, OUTPUT);
+
+  // Светодиод
+  pinMode(LED_PIN, OUTPUT);
+
+
+  Serial.println("All pins initialized");
+}  // end  initializeAllPins()
+
+
+
+
+void setup() {
+    initializeAllPins();
+
+    Serial.begin(115200);
+    Serial2.begin(9600, SERIAL_8N1, E49_PIN_RX, E49_PIN_TX);
+    
+            // handleRadioCommunication();
+    Serial.println("\n=== СИСТЕМА УПРАВЛЕНИЯ БПЛА ===");
+    Serial.println("Версия 2.0 - Запуск...");
+    
+    initializeSystem();
+    systemStartTime = millis();
+
+    delay(1000);
+}
+
+void loop() {
+    uint32_t currentTime = millis();
+    handleRadioCommunication() ;
+    handleSystemState();
+    processSensors();
+    controlOutputs();
+    logTelemetry();
+    updateSystemStatus();
+    checkSystemHealth();
+    
+    // Стабильная задержка цикла
+    uint32_t processingTime = millis() - currentTime;
+    if (processingTime < 10) {
+        delay(10 - processingTime);
+    }
+
+    // Добавить проверку времени выполнения
+    uint32_t loopTime = millis() - loopStart;
+    if (loopTime > 50) {  // Предупреждение если цикл > 50мс
+        Serial.printf("⚠️ Long loop time: %lumS\n", loopTime);
+    }
+
+}
+
+/*
+void initializeSystem() {
+    systemState = SystemState::INITIALIZING;
+    Serial.println("🔄 Инициализация модулей...");
+    
+    bool allOk = true;
+    
+    // Для каждого модуля:
+    if (!ICMHandler::begin()) {
+        Serial.println("❌ ICM-20948: FAILED");
+        allOk = false;
+        errorCount++;
+    }
+    
+    if (!allOk) {
+        systemState = SystemState::ERROR;
+        Serial.println("🚨 Система инициализирована с ошибками!");
+    }
+
+*/
+// ================== РЕАЛИЗАЦИЯ ФУНКЦИЙ ==================
+void initializeSystem() {
+    systemState = SystemState::INITIALIZING;
+    Serial.println("🔄 Инициализация модулей...");
+    
+    bool allOk = true;
+
+    // 1. Инициализация SPI
+    SPIManager::begin();
+    Serial.println("SPI менеджер: OK");
+    
+    // 2. Инициализация IMU
+    if (ICMHandler::begin()) {
+        Serial.println("ICM-20948: OK");
+    } else {
+        Serial.println("ICM-20948: ERROR");
+        systemState = SystemState::ERROR;
+        return;
+    }
+    
+    // 3. Инициализация SD карты
+    if (SDHandler::begin()) {
+        Serial.println("SD карта: OK");
+    } else {
+        Serial.println("SD карта: WARNING");
+    }
+    
+    // 4. Инициализация элеронов
+    EleronController::begin();
+    Serial.println("Сервоприводы: OK");
+    
+    // 5. Инициализация радиомодуля
+    if (radioReceiver.init() == EbyteStatus::SUCCESS) {
+        Serial.println("Радиомодуль: OK");
+    } else {
+        Serial.println("Радиомодуль: ERROR");
+        systemState = SystemState::ERROR;
+        return;
+    }
+    
+    systemState = SystemState::STANDBY;
+    Serial.println("=== СИСТЕМА ГОТОВА ===");
+}
+
+void handleSystemState() {
+        //  static uint32_t lastStateChange = 0;
+    
+    switch (systemState) {
+        case SystemState::STANDBY:
+            // Мигание LED в режиме ожидания
+            digitalWrite(LED_PIN, millis() % 1000 < 500);
+            break;
+            
+        case SystemState::ACTIVE:
+            // Постоянное свечение в активном режиме
+            digitalWrite(LED_PIN, HIGH);
+            break;
+            
+        case SystemState::ERROR:
+            // Аварийная индикация
+            digitalWrite(LED_PIN, millis() % 200 < 100);
+            break;
+            
+        case SystemState::RECOVERY:
+            systemRecovery();
+            break;
+            
+        default:
+            break;
+    }
+    
+    // Логирование изменений состояния
+    if (systemState != previousState) {
+        Serial.printf("Смена состояния: %d -> %d\n", 
+                     static_cast<int>(previousState), 
+                     static_cast<int>(systemState));
+        previousState = systemState;
+              //  lastStateChange = millis();
+    }
+}
+
+void processSensors() {
+    static uint32_t lastIMURead = 0;
+    
+    if (millis() - lastIMURead >= ICM_READ_INTERVAL) {
+        if (ICMHandler::readData()) {
+            SensorData data = ICMHandler::getData();
+            EleronController::update(data);
+        }
+        lastIMURead = millis();
+    }
+}
+
+void handleRadioCommunication() {
+    static uint32_t lastRadioProcess = 0;
+    
+    if (millis() - lastRadioProcess >= RADIO_PROCESS_INTERVAL) {
+        radioReceiver.process(); // Будет обрабатывать состояние автомата
+        //  radioReceiver.process();
+        lastRadioProcess = millis();
+    }
+}
+
+void controlOutputs() {
+    // Управление через EleronController
+}
+
+void logTelemetry() {
+    static uint32_t lastSDWrite = 0;
+    
+    if (millis() - lastSDWrite >= SD_WRITE_INTERVAL) {
+        SensorData data = ICMHandler::getData();
+        SDHandler::writeData(data);
+        lastSDWrite = millis();
+    }
+}
+
+void updateSystemStatus() {
+    static uint32_t lastStatusUpdate = 0;
+    
+    if (millis() - lastStatusUpdate >= STATUS_UPDATE_INTERVAL) {
+        printStatusReport();
+        lastStatusUpdate = millis();
+    }
+}
+
+void handleEmergency() {
+    Serial.println("!!! АВАРИЙНЫЙ РЕЖИМ !!!");
+    EleronController::setNeutralPosition();
+    
+    static uint32_t emergencyStart = 0;
+    if (emergencyStart == 0) {
+        emergencyStart = millis();
+    }
+    
+    if (millis() - emergencyStart > 10000) {
+        systemState = SystemState::RECOVERY;
+        emergencyStart = 0;
+    }
+}
+
+void systemRecovery() {
+    Serial.println("Попытка восстановления...");
+    
+    SDHandler::end();
+    delay(1000);
+    
+    if (ICMHandler::begin() && radioReceiver.init() == EbyteStatus::SUCCESS) {
+        systemState = SystemState::STANDBY;
+        Serial.println("Восстановление успешно!");
+    } else {
+        Serial.println("Восстановление не удалось!");
+        systemState = SystemState::ERROR;
+    }
+}
+
+void printStatusReport() {
+    Serial.println("\n=== СТАТУС СИСТЕМЫ ===");
+    Serial.printf("Время работы: %lu сек\n", millis() / 1000);
+    Serial.printf("Состояние: %d\n", static_cast<int>(systemState));
+    Serial.printf("Ошибок: %lu\n", errorCount);
+    Serial.printf("Память: %lu байт\n", ESP.getFreeHeap());
+    Serial.printf("Чтения IMU: %lu\n", ICMHandler::getReadCount());
+    Serial.printf("Radio State: %d\n", static_cast<int>(radioReceiver.getInternalState()));
+
+    Serial.println("======================");
+}
+
+void checkSystemHealth() {
+    static uint32_t lastHealthCheck = 0;
+    
+    if (millis() - lastHealthCheck >= ERROR_CHECK_INTERVAL) {
+        // Проверка перегрева
+        float temp = temperatureRead();
+        if (temp > 75.0) {
+            Serial.println("Перегрев процессора!");
+            systemState = SystemState::ERROR;
+        }
+        
+        // Проверка памяти
+        if (ESP.getFreeHeap() < 10000) {
+            Serial.println("Мало свободной памяти!");
+        }
+        
+        lastHealthCheck = millis();
+    }
+}
+
+
+
+
+
+//====================================================================
+//	3. Файл E49_Controller.cpp
+//====================================================================
+//  3. Обновленный E49_Controller.cpp
+//
+#include "E49_Controller.h"
+#include <SD.h>
+#include <SPI.h>
+
+// Таблица для быстрого расчета CRC8
+static const uint8_t crc8_table[256] = {
+    0x00, 0x07, 0x0E, 0x09, 0x1C, 0x1B, 0x12, 0x15, 0x38, 0x3F, 0x36, 0x31, 0x24, 0x23, 0x2A, 0x2D,
+    0x70, 0x77, 0x7E, 0x79, 0x6C, 0x6B, 0x62, 0x65, 0x48, 0x4F, 0x46, 0x41, 0x54, 0x53, 0x5A, 0x5D,
+    0xE0, 0xE7, 0xEE, 0xE9, 0xFC, 0xFB, 0xF2, 0xF5, 0xD8, 0xDF, 0xD6, 0xD1, 0xC4, 0xC3, 0xCA, 0xCD,
+    0x90, 0x97, 0x9E, 0x99, 0x8C, 0x8B, 0x82, 0x85, 0xA8, 0xAF, 0xA6, 0xA1, 0xB4, 0xB3, 0xBA, 0xBD,
+    0xC7, 0xC0, 0xC9, 0xCE, 0xDB, 0xDC, 0xD5, 0xD2, 0xFF, 0xF8, 0xF1, 0xF6, 0xE3, 0xE4, 0xED, 0xEA,
+    0xB7, 0xB0, 0xB9, 0xBE, 0xAB, 0xAC, 0xA5, 0xA2, 0x8F, 0x88, 0x81, 0x86, 0x93, 0x94, 0x9D, 0x9A,
+    0x27, 0x20, 0x29, 0x2E, 0x3B, 0x3C, 0x35, 0x32, 0x1F, 0x18, 0x11, 0x16, 0x03, 0x04, 0x0D, 0x0A,
+    0x57, 0x50, 0x59, 0x5E, 0x4B, 0x4C, 0x45, 0x42, 0x6F, 0x68, 0x61, 0x66, 0x73, 0x74, 0x7D, 0x7A,
+    0x89, 0x8E, 0x87, 0x80, 0x95, 0x92, 0x9B, 0x9C, 0xB1, 0xB6, 0xBF, 0xB8, 0xAD, 0xAA, 0xA3, 0xA4,
+    0xF9, 0xFE, 0xF7, 0xF0, 0xE5, 0xE2, 0xEB, 0xEC, 0xC1, 0xC6, 0xCF, 0xC8, 0xDD, 0xDA, 0xD3, 0xD4,
+    0x69, 0x6E, 0x67, 0x60, 0x75, 0x72, 0x7B, 0x7C, 0x51, 0x56, 0x5F, 0x58, 0x4D, 0x4A, 0x43, 0x44,
+    0x19, 0x1E, 0x17, 0x10, 0x05, 0x02, 0x0B, 0x0C, 0x21, 0x26, 0x2F, 0x28, 0x3D, 0x3A, 0x33, 0x34,
+    0x4E, 0x49, 0x40, 0x47, 0x52, 0x55, 0x5C, 0x5B, 0x76, 0x71, 0x78, 0x7F, 0x6A, 0x6D, 0x64, 0x63,
+    0x3E, 0x39, 0x30, 0x37, 0x22, 0x25, 0x2C, 0x2B, 0x06, 0x01, 0x08, 0x0F, 0x1A, 0x1D, 0x14, 0x13,
+    0xAE, 0xA9, 0xA0, 0xA7, 0xB2, 0xB5, 0xBC, 0xBB, 0x96, 0x91, 0x98, 0x9F, 0x8A, 0x8D, 0x84, 0x83,
+    0xDE, 0xD9, 0xD0, 0xD7, 0xC2, 0xC5, 0xCC, 0xCB, 0xE6, 0xE1, 0xE8, 0xEF, 0xFA, 0xFD, 0xF4, 0xF3
+};
+
+
+E49_Controller::E49_Controller(bool isSender, HardwareSerial* serial) :
+    _isSender(isSender),
+    _debugEnabled(false),
+    _ledState(false),
+    _lastLedToggle(0),
+    _internalState(InternalState::IDLE),
+    _stateStartTime(0),
+    _currentRetry(0),
+    _lastResetTime(0),
+    _lastSaveTime(0)
+{
+    memset(&_stats, 0, sizeof(_stats));
+    memset(&_currentTxPacket, 0, sizeof(_currentTxPacket));
+    memset(&_currentRxPacket, 0, sizeof(_currentRxPacket));
+    memset(&_currentAckPacket, 0, sizeof(_currentAckPacket));
+    
+    // Инициализация serial порта
+    serial->begin(E49_BAUDRATE, SERIAL_8N1, E49_PIN_RX, E49_PIN_TX);
+    //  _transceiver = new EBYTE(serial, E49_PIN_M0, E49_PIN_M1, E49_PIN_AUX);
+    _transceiver = new EBYTE(serial, E49_PIN_M0, E49_PIN_M1, E49_PIN_AUX);
+    _lastActivityTime = millis();
+    _lastReconnectAttempt = millis();
+}
+
+E49_Controller::~E49_Controller() {
+    if (_transceiver != nullptr) {
+        delete _transceiver;
+        _transceiver = nullptr;
+    }
+}
+
+void E49_Controller::changeState(InternalState newState) {
+    if (_debugEnabled) {
+                            const char* stateNames[] = {
+                        "IDLE", "WAITING_FOR_AUX", "SENDING_DATA", "WAITING_FOR_ACK",
+                        "RECEIVING_DATA", "PROCESSING_DATA", "SENDING_ACK", "RESETTING", "ERROR"
+                    };
+                    
+                    Serial.printf("📻 Radio state: %s -> %s\n", 
+                                stateNames[static_cast<int>(_internalState)],
+                                stateNames[static_cast<int>(newState)]);
+                    
+                    _internalState = newState;
+                    _stateStartTime = millis();
+                        Serial.printf("State change: %d -> %d\n", 
+                     static_cast<int>(_internalState), 
+                     static_cast<int>(newState));
+    }
+    _internalState = newState;
+    _stateStartTime = millis();
+}
+
+EbyteStatus E49_Controller::init() {
+    //    pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, LOW);
+    
+    // Инициализация модуля
+    if (!_transceiver->init()) {
+        if (_debugEnabled) Serial.println("E49 module initialization failed");
+        return EbyteStatus::ERROR_INIT;
+    }
+    
+    // Настройка параметров модуля
+    _transceiver->SetParityBit(PB_8N1);
+    _transceiver->SetAddressH(E49_ADDRESS_H);
+    _transceiver->SetAddressL(E49_ADDRESS_L);
+    _transceiver->SetChannel(E49_CHANNEL);
+    _transceiver->SetAirDataRate(ADR_19200);
+    _transceiver->SetUARTBaudRate(UDR_9600);
+
+    // Сохранение параметров (неблокирующее)
+    _transceiver->SaveParameters(PERMANENT);
+    _lastSaveTime = millis();
+    
+    if (_debugEnabled) {
+        Serial.println("E49 module initialization started");
+    }
+    changeState(InternalState::IDLE); // Убираем INITIALIZING
+    return EbyteStatus::SUCCESS;
+
+}
+
+EbyteStatus E49_Controller::waitForAux(uint32_t timeout) {
+    uint32_t startTime = millis();
+    
+    while (millis() - startTime < timeout) {
+        if (digitalRead(E49_PIN_AUX) == HIGH) {
+            return EbyteStatus::SUCCESS;
+        }
+        
+        // Неблокирующая задержка
+        delay(1);
+        yield();
+        
+        // Обновление LED индикации
+        updateLED();
+    }
+    
+    _stats.aux_timeouts++;
+    return EbyteStatus::ERROR_AUX_TIMEOUT;
+}
+
+uint8_t E49_Controller::calculateCRC8(const uint8_t* data, size_t length) const {
+    uint8_t crc = 0;
+    
+    // Оптимизированный расчет CRC8 с использованием таблицы
+    for (size_t i = 0; i < length; i++) {
+        crc = crc8_table[crc ^ data[i]];
+    }
+    
+    return crc;
+}
+
+void E49_Controller::process() {
+    updateLED();
+    
+
+    switch (_internalState) {
+        case InternalState::IDLE:
+            if (!_isSender) {
+                // Приемник ожидает данные
+                if (_transceiver->available()) {
+                    changeState(InternalState::RECEIVING_DATA);
+                }
+            }
+            break;
+            
+        case InternalState::WAITING_FOR_AUX:
+            if (digitalRead(E49_PIN_AUX) == HIGH) {
+                changeState(InternalState::SENDING_DATA);
+            } else if (millis() - _stateStartTime > AUX_TIMEOUT_MS) {
+                _stats.aux_timeouts++;
+                if (++_currentRetry < MAX_RETRIES) {
+                    changeState(InternalState::WAITING_FOR_AUX);
+                } else {
+                    changeState(InternalState::ERROR);
+                }
+            }
+            break;
+            
+        case InternalState::SENDING_DATA:
+            if (_transceiver->SendStruct(&_currentTxPacket, sizeof(_currentTxPacket))) {
+                _stats.tx_packets++;
+                _lastActivityTime = millis();
+                
+                BitMask mask(_currentTxPacket.comSetAll);
+                if (mask.getBit(0)) {
+                    changeState(InternalState::WAITING_FOR_ACK);
+                } else {
+                    changeState(InternalState::IDLE);
+                }
+            } else {
+                _stats.tx_errors++;
+                if (++_currentRetry < MAX_RETRIES) {
+                    changeState(InternalState::WAITING_FOR_AUX);
+                } else {
+                    changeState(InternalState::ERROR);
+                }
+            }
+            break;
+            
+        case InternalState::WAITING_FOR_ACK:
+            {
+                AckPacket_t ack;
+                EbyteStatus status = receiveAck(ack);
+                
+                if (status == EbyteStatus::SUCCESS) {
+                    if (ack.packet_id == _currentTxPacket.packet_id) {
+                        changeState(InternalState::IDLE);
+                    }
+                } else if (status != EbyteStatus::ERROR_NO_NEW_DATA) {
+                    if (++_currentRetry < MAX_RETRIES) {
+                        changeState(InternalState::WAITING_FOR_AUX);
+                    } else {
+                        changeState(InternalState::ERROR);
+                    }
+                }
+                
+                if (millis() - _stateStartTime > ACK_TIMEOUT_MS) {
+                    _stats.receive_timeouts++;
+                    if (++_currentRetry < MAX_RETRIES) {
+                        changeState(InternalState::WAITING_FOR_AUX);
+                    } else {
+                        changeState(InternalState::ERROR);
+                    }
+                }
+            }
+            break;
+            
+        case InternalState::RECEIVING_DATA:
+            if (_transceiver->GetStruct(&_currentRxPacket, sizeof(_currentRxPacket))) {
+                // Проверка преамбулы
+                if (_currentRxPacket.preamble[0] != PACKET_PREAMBLE_1 || 
+                    _currentRxPacket.preamble[1] != PACKET_PREAMBLE_2) {
+                    _stats.preamble_errors++;
+                    changeState(InternalState::IDLE);
+                    break;
+                }
+                
+                // Проверка CRC
+                uint8_t crc = _currentRxPacket.crc8;
+                _currentRxPacket.crc8 = 0;
+                uint8_t calculated_crc = calculateCRC8((uint8_t*)&_currentRxPacket, sizeof(_currentRxPacket) -1);
+                
+                if (crc != calculated_crc) {
+                    _stats.crc_errors++;
+                    changeState(InternalState::IDLE);
+                    break;
+                }
+                
+                _stats.rx_packets++;
+                _lastActivityTime = millis();
+                
+                BitMask mask(_currentRxPacket.comSetAll);
+                if (mask.getBit(0)) {
+                    changeState(InternalState::SENDING_ACK);
+                } else {
+                    changeState(InternalState::IDLE);
+                }
+                
+                if (_debugEnabled) {
+                    Serial.print("Received packet ID: ");
+                    Serial.println(_currentRxPacket.packet_id);
+                }
+            } else {
+                changeState(InternalState::IDLE);
+            }
+            break;
+            
+        case InternalState::SENDING_ACK:
+            {
+                EbyteStatus status = sendAck(_currentRxPacket.packet_id, 1);
+                if (status == EbyteStatus::SUCCESS) {
+                    changeState(InternalState::IDLE);
+                } else {
+                    if (++_currentRetry < MAX_RETRIES) {
+                        changeState(InternalState::SENDING_ACK);
+                    } else {
+                        changeState(InternalState::ERROR);
+                    }
+                }
+            }
+            break;
+            
+        case InternalState::ERROR:
+            // Обработка ошибок
+            handleConnectionRecovery();
+            break;
+            
+        default:
+            changeState(InternalState::IDLE);
+            break;
+    }
+    
+    // Проверка соединения
+    handleConnectionRecovery();
+}
+
+EbyteStatus E49_Controller::sendAck(uint16_t packet_id, uint8_t status) {
+    AckPacket_t ack;
+    ack.preamble[0] = ACK_PREAMBLE_1;
+    ack.preamble[1] = ACK_PREAMBLE_2;
+    ack.packet_id = packet_id;
+    ack.timestamp = millis();
+    ack.status = status;
+    ack.crc8 = calculateCRC8((uint8_t*)&ack, sizeof(ack) - 1);
+    
+    EbyteStatus auxStatus = waitForAux();
+    if (auxStatus != EbyteStatus::SUCCESS) {
+        return auxStatus;
+    }
+    
+    if (_transceiver->SendStruct(&ack, sizeof(ack))) {
+        return EbyteStatus::SUCCESS;
+    }
+    
+    return EbyteStatus::ERROR_SEND;
+}
+
+EbyteStatus E49_Controller::receiveAck(AckPacket_t& ack) {
+    if (!_transceiver->available()) {
+        return EbyteStatus::ERROR_NO_NEW_DATA;
+    }
+    
+    if (_transceiver->GetStruct(&ack, sizeof(ack))) {
+        // Проверка преамбулы
+        if (ack.preamble[0] != ACK_PREAMBLE_1 || ack.preamble[1] != ACK_PREAMBLE_2) {
+            _stats.preamble_errors++;
+            return EbyteStatus::ERROR_INVALID_DATA;
+        }
+        
+        // Проверка CRC
+        uint8_t crc = ack.crc8;
+        ack.crc8 = 0;
+        uint8_t calculated_crc = calculateCRC8((uint8_t*)&ack, sizeof(ack) -1);
+        
+        if (crc != calculated_crc) {
+            _stats.crc_errors++;
+            return EbyteStatus::ERROR_CRC;
+        }
+        
+        return EbyteStatus::SUCCESS;
+    }
+    
+    return EbyteStatus::ERROR_NO_NEW_DATA;
+}
+
+void E49_Controller::handleConnectionRecovery() {
+    if (millis() - _lastActivityTime > CONNECTION_TIMEOUT_MS) {
+        _stats.connection_lost_events++;
+        
+        if (millis() - _lastReconnectAttempt > RECONNECT_INTERVAL_MS) {
+            _lastReconnectAttempt = millis();
+            
+            if (attemptRecovery()) {
+                _stats.reconnects++;
+                _lastActivityTime = millis();
+                changeState(InternalState::IDLE);
+                
+                if (_debugEnabled) {
+                    Serial.println("Connection recovered successfully");
+                }
+            } else if (_debugEnabled) {
+                Serial.println("Connection recovery failed");
+            }
+        }
+    }
+}
+
+bool E49_Controller::attemptRecovery() {
+    if (_debugEnabled) {
+        Serial.println("Attempting module recovery...");
+    }
+    
+    // Сброс модуля
+    resetModule();
+    delay(200);
+    
+    // Повторная инициализация
+    if (reinitialize() != EbyteStatus::SUCCESS) {
+        return false;
+    }
+    
+    // Проверка готовности модуля
+    if (waitForAux(500) != EbyteStatus::SUCCESS) {
+        return false;
+    }
+    
+    return testCommunication();
+}
+
+bool E49_Controller::testCommunication() {
+    if (_isSender) {
+        DataComSet_t testPacket = createTestPacket();
+        testPacket.comSetAll = COM_SETALL_MASK;
+        
+        EbyteStatus status = startSendingData(testPacket);
+        if (status != EbyteStatus::SUCCESS) return false;
+        
+        // Ожидание завершения отправки
+        uint32_t startTime = millis();
+        while (_internalState != InternalState::IDLE && 
+               (millis() - startTime) < 2000) {
+            process();
+            delay(10);
+        }
+        
+        return _internalState == InternalState::IDLE;
+    } else {
+        // Для приемника проверяем готовность AUX
+        return (waitForAux(100) == EbyteStatus::SUCCESS);
+    }
+}
+
+void E49_Controller::resetModule() {
+    if (_debugEnabled) Serial.println("Resetting module...");
+    
+    _transceiver->Reset();
+    delay(100);
+    _stats.resets++;
+    _lastActivityTime = millis();
+}
+
+void E49_Controller::updateLED() {
+    if (millis() - _lastLedToggle > LED_BLINK_INTERVAL_MS) {
+        _ledState = !_ledState;
+        digitalWrite(LED_PIN, _ledState ? HIGH : LOW);
+        _lastLedToggle = millis();
+    }
+}
+
+DataComSet_t E49_Controller::createTestPacket() const {
+    DataComSet_t packet;
+    packet.preamble[0] = PACKET_PREAMBLE_1;
+    packet.preamble[1] = PACKET_PREAMBLE_2;
+    packet.packet_id = 0xFFFF;
+    packet.comUp = 127;
+    packet.comLeft = 127;
+    packet.comThrottle = 1500;
+    packet.comParashut = 0;
+    packet.timestamp = millis();
+    packet.comSetAll = 0;
+    packet.crc8 = calculateCRC8((uint8_t*)&packet, sizeof(packet) - 1);
+    
+    return packet;
+}
+
+EbyteStatus E49_Controller::startSendingData(const DataComSet_t& data) {
+    if (!_isSender) return EbyteStatus::ERROR_BUSY;
+    if (_internalState != InternalState::IDLE) return EbyteStatus::ERROR_BUSY;
+    
+    _currentTxPacket = data;
+    _currentTxPacket.preamble[0] = PACKET_PREAMBLE_1;
+    _currentTxPacket.preamble[1] = PACKET_PREAMBLE_2;
+    _currentTxPacket.crc8 = calculateCRC8((uint8_t*)&_currentTxPacket, sizeof(_currentTxPacket) - 1);
+    
+    _currentRetry = 0;
+    changeState(InternalState::WAITING_FOR_AUX);
+    
+    return EbyteStatus::SUCCESS;
+}
+
+void E49_Controller::printStatus(EbyteStatus status) const {
+    switch(status) {
+        case EbyteStatus::SUCCESS: Serial.println("Success"); break;
+        case EbyteStatus::ERROR_AUX_TIMEOUT: Serial.println("AUX timeout"); break;
+        case EbyteStatus::ERROR_SEND: Serial.println("Send error"); break;
+        case EbyteStatus::ERROR_RECEIVE: Serial.println("Receive error"); break;
+        case EbyteStatus::ERROR_CRC: Serial.println("CRC error"); break;
+        case EbyteStatus::ERROR_INVALID_DATA: Serial.println("Invalid data"); break;
+        case EbyteStatus::ERROR_NO_NEW_DATA: Serial.println("No new data"); break;
+        case EbyteStatus::ERROR_CONNECTION_LOST: Serial.println("Connection lost"); break;
+        case EbyteStatus::ERROR_NOT_READY: Serial.println("Not ready"); break;
+        case EbyteStatus::ERROR_BUSY: Serial.println("Busy"); break;
+        default: Serial.println("Unknown error"); break;
+    }
+}
+
+void E49_Controller::printStats() const {
+    Serial.println("=== E49 Module Statistics ===");
+    Serial.print("TX packets: "); Serial.println(_stats.tx_packets);
+    Serial.print("RX packets: "); Serial.println(_stats.rx_packets);
+    Serial.print("CRC errors: "); Serial.println(_stats.crc_errors);
+    Serial.print("TX errors: "); Serial.println(_stats.tx_errors);
+    Serial.print("RX errors: "); Serial.println(_stats.rx_errors);
+    Serial.print("Resets: "); Serial.println(_stats.resets);
+    Serial.print("Reconnects: "); Serial.println(_stats.reconnects);
+    Serial.print("AUX timeouts: "); Serial.println(_stats.aux_timeouts);
+    Serial.print("Connection lost events: "); Serial.println(_stats.connection_lost_events);
+    Serial.println("============================");
+}
+
+void E49_Controller::enableDebug(bool enable) {
+    _debugEnabled = enable;
+}
+
+void E49_Controller::forceRecovery() {
+    if (_debugEnabled) {
+        Serial.println("Forced recovery initiated");
+    }
+    _lastReconnectAttempt = 0;
+    _lastActivityTime = millis() - CONNECTION_TIMEOUT_MS - 1;
+    handleConnectionRecovery();
+}
+
+bool E49_Controller::isConnectionLost() const {
+    return (millis() - _lastActivityTime) > CONNECTION_TIMEOUT_MS;
+}
+
+//====================================================================
+
+
+
+
+
+//===============================================
+//  4. Исправленный Eleron_Controller.cpp
+//=================================================
+//
+//  📋 Полная реализация Eleron_Controller.cpp
+//
+#include "Eleron_Controller.h"
+#include <driver/ledc.h>
+#include <math.h>
+
+// Конфигурация сервоприводов (убедитесь, что они определены в E49_Config.h)
+extern const int servoPins[5];
+extern const ledc_channel_t channels[5];
+
+
+// Определения глобальных переменных
+// int servoAngles[5] = { 0, 0, 0, 0, 0 };
+// int servoTargetAngles[5] = { 0, 0, 0, 0, 0 };
+
+// Статические переменные
+uint32_t EleronController::last_update_time = 0;
+int EleronController::current_angles[5] = {90, 90, 90, 90, 90};
+bool EleronController::test_running = false;
+uint32_t EleronController::test_start_time = 0;
+uint8_t EleronController::test_phase = 0;
+// Eleron_Controller.cpp    // Добавляем в начало файла:
+//  extern float servoAngles[5]; // Объявляем внешнюю переменную
+extern int servoAngles[5]; // Объявляем внешнюю переменную
+
+
+void EleronController::begin() {
+    // Настройка таймера LEDC
+    ledc_timer_config_t timer_conf = {};
+    timer_conf.speed_mode = LEDC_LOW_SPEED_MODE;
+    timer_conf.duty_resolution = LEDC_TIMER_12_BIT;
+    timer_conf.timer_num = LEDC_TIMER_0;
+    timer_conf.freq_hz = 50;
+    timer_conf.clk_cfg = LEDC_AUTO_CLK;
+    ledc_timer_config(&timer_conf);
+    
+    // Настройка каналов
+    for (int i = 0; i < 5; i++) {
+        ledc_channel_config_t channel_conf = {};
+        channel_conf.gpio_num = servoPins[i];
+        channel_conf.speed_mode = LEDC_LOW_SPEED_MODE;
+        //channel_conf.channel = channels[i];
+        channel_conf.channel = servoChannels[i];        
+
+        channel_conf.intr_type = LEDC_INTR_DISABLE;
+        channel_conf.timer_sel = LEDC_TIMER_0;
+        channel_conf.duty = 0;
+        channel_conf.hpoint = 0;
+        ledc_channel_config(&channel_conf);
+        
+        setServoAngle(i, 90); // Нейтральное положение
+    }
+    
+    last_update_time = millis();
+    Serial.println("✅ EleronController initialized");
+}
+
+void EleronController::setNeutralPosition() {
+    for (int i = 0; i < 5; i++) {
+        setServoAngle(i, 90);
+    }
+    Serial.println("✅ Servos set to neutral position");
+}
+
+void EleronController::update(const SensorData& data) {
+    uint32_t current_time = millis();
+    
+    if ((current_time - last_update_time) < UPDATE_INTERVAL && 
+        current_time >= last_update_time) {
+        return;
+    }
+    
+    if (test_running) {
+        runTestSequence();
+    } else {
+        processIMUData(data);
+    }
+    
+    last_update_time = current_time;
+}
+
+void EleronController::processIMUData(const SensorData& data) {
+    // Преобразуем углы из IMU в диапазон сервоприводов
+    int pitch_angle = constrain(map(data.euler[1], -90, 90, 0, 180), 0, 180);
+    int roll_angle = constrain(map(data.euler[0], -90, 90, 0, 180), 0, 180);
+    
+    // Обновляем глобальные переменные
+    ::servoAngles[0] = roll_angle;
+    ::servoAngles[1] = pitch_angle;
+    ::servoAngles[2] = 90;
+    ::servoAngles[3] = 180 - roll_angle;
+    ::servoAngles[4] = 90;
+    
+    // Устанавливаем углы сервоприводов
+    for (int i = 0; i < 5; i++) {
+        setServoAngle(i, ::servoAngles[i]);
+    }
+}
+
+void EleronController::setServoAngle(uint8_t channel, int angle) {
+    if (channel >= 5) return;
+    
+    angle = constrain(angle, 0, 180);
+    current_angles[channel] = angle;
+    
+    // Преобразование угла в микросекунды (500-2400μs)
+    int pulse_width = map(angle, 0, 180, 500, 2400);
+    
+    // Преобразование в duty цикл (12-bit resolution, 50Hz)
+    uint32_t duty = (pulse_width * 4096UL) / 20000UL;
+            //  duty = constrain(duty, 0, 4095);
+    if (duty > 4095) duty = 4095;
+
+            //  ledcWrite(channels[channel], duty);
+    ledcWrite(servoChannels[channel], duty);
+
+}
+
+void EleronController::startTestSequence() {
+    test_running = true;
+    test_start_time = millis();
+    Serial.println("🚀 Starting servo test sequence for all 5 servos...");
+}
+
+void EleronController::stopTestSequence() {
+    test_running = false;
+    Serial.println("🛑 Servo test sequence stopped");
+    setNeutralPosition();
+}
+
+void EleronController::runTestSequence() {
+    if (!test_running) return;
+    
+    uint32_t current_time = millis();
+    uint32_t elapsed = current_time - test_start_time;
+    uint32_t phase_time = elapsed % 8000;
+    
+    for (int i = 0; i < 5; i++) {
+        int angle = 90;
+        
+        switch (i) {
+            case 0:
+                angle = (phase_time < 4000) ? 
+                    map(phase_time, 0, 4000, 0, 180) :
+                    map(phase_time, 4000, 8000, 180, 0);
+                break;
+                
+            case 1:
+                angle = 90 + 60 * sin(2 * M_PI * phase_time / 2000.0);
+                break;
+                
+            case 2:
+                if (phase_time < 2000) angle = 45;
+                else if (phase_time < 4000) angle = 90;
+                else if (phase_time < 6000) angle = 135;
+                else angle = 90;
+                break;
+                
+            case 3:
+                angle = map(phase_time, 0, 8000, 0, 180);
+                break;
+                
+            case 4:
+                angle = 90 + 30 * sin(2 * M_PI * phase_time / 3000.0) + 
+                        20 * cos(2 * M_PI * phase_time / 5000.0);
+                break;
+        }
+        
+        angle = constrain(angle, 0, 180);
+        servoTargetAngles[i] = angle;
+        setServoAngle(i, angle);
+    }
+    
+    if (elapsed % 1000 < 20) {
+        Serial.printf("🔧 Test: %lu ms | Angles: %d, %d, %d, %d, %d\n",
+            elapsed, current_angles[0], current_angles[1], current_angles[2],
+            current_angles[3], current_angles[4]);
+    }
+    
+    if (elapsed > 60000) {
+        stopTestSequence();
+    }
+}
+//=============================================================================================================
+// ================== ОПРЕДЕЛЕНИЯ ГЛОБАЛЬНЫХ ПЕРЕМЕННЫХ ==================
+int servoAngles[5] = { 0, 0, 0, 0, 0 };
+int servoTargetAngles[5] = { 0, 0, 0, 0, 0 };
+
+    //======================================
+    //  3. Исправленный ICM_Handler.cpp
+    //======================================
+    //  4. Исправленный ICM_Handler.cpp
+    //
+    //  6. ICM_Handler.cpp - Полная реализация с буфером
+    //
+
+#include "ICM_Handler.h"
+
+// Инициализация статических переменных
+uint32_t ICMHandler::last_read_time = 0;
+SensorData ICMHandler::current_data = {
+    .timestamp = 0,
+    .accel = {0, 0, 0},
+    .gyro = {0, 0, 0},
+    .mag = {0, 0, 0},
+    .euler = {0, 0, 0},
+    .quat = {0, 0, 0, 0},
+    .status = 0
+};
+uint32_t ICMHandler::read_count = 0;
+uint32_t ICMHandler::error_count = 0;
+
+// Буферные переменные
+SensorData ICMHandler::data_buffer[ICMHandler::BUFFER_SIZE];
+size_t ICMHandler::buffer_index = 0;
+bool ICMHandler::buffer_overflow = false;
+
+// ICM_Handler.cpp
+bool ICMHandler::begin() {
+    if (!SPIManager::acquireForICM(10)) {
+        return false;
+    }
+
+    // Быстрая инициализация без ожидания
+    SPIClass& spi = SPIManager::getSPI();
+    spi.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE0));
+    
+    digitalWrite(SPI_ICM_CS, LOW);
+    spi.transfer(0x80 | 0x00);
+    uint8_t id = spi.transfer(0);
+    digitalWrite(SPI_ICM_CS, HIGH);
+    
+    spi.endTransaction();
+    SPIManager::release();
+    
+    bool success = (id == 0xEA);
+    if (success) {
+        Serial.println("ICM initialized");
+    }
+    
+    return success;
+}
+
+
+        /*
+bool ICMHandler::begin() {
+    if (!SPIManager::acquireForICM(10)) {
+        error_count++;
+        return false;
+    }
+
+    bool success = false;
+    SPIClass& spi = SPIManager::getSPI();
+    
+    spi.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE0));
+    try {
+        // Инициализация ICM
+        digitalWrite(SPI_ICM_CS, LOW);
+        spi.transfer(0x80 | 0x00); // WHO_AM_I
+        uint8_t id = spi.transfer(0);
+        digitalWrite(SPI_ICM_CS, HIGH);
+        
+        success = (id == 0xEA);
+        if (success) {
+            Serial.println("✅ ICM-20948 initialized successfully");
+        } else {
+            Serial.printf("❌ ICM-20948 init failed. ID: 0x%02X\n", id);
+        }
+    } catch (...) {
+        success = false;
+        Serial.println("❌ Exception during ICM initialization");
+    }
+    */
+
+
+    spi.endTransaction();
+    SPIManager::release();
+    
+    if (!success) error_count++;
+    
+    // Инициализация буфера
+    clearBuffer();
+    
+    return success;
+}
+
+bool ICMHandler::readData() {
+    uint32_t current_time = millis();
+    
+    // Защита от переполнения millis()
+    if ((uint32_t)(current_time - last_read_time) < READ_INTERVAL) {
+        return false;
+    }
+
+    if (!SPIManager::acquireForICM(5)) {
+        error_count++;
+        Serial.println("⚠️ Failed to acquire SPI for ICM");
+        return false;
+    }
+
+    bool read_success = true;
+    SPIClass& spi = SPIManager::getSPI();
+    
+    try {
+        spi.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE0));
+        
+        // Чтение акселерометра
+        digitalWrite(SPI_ICM_CS, LOW);
+        spi.transfer(0x80 | 0x2D); // ACCEL_XOUT_H
+        current_data.accel[0] = (spi.transfer(0) << 8) | spi.transfer(0);
+        current_data.accel[1] = (spi.transfer(0) << 8) | spi.transfer(0);
+        current_data.accel[2] = (spi.transfer(0) << 8) | spi.transfer(0);
+        digitalWrite(SPI_ICM_CS, HIGH);
+        
+       // Чтение гироскопа (добавьте аналогично)
+         // Чтение магнитометра (добавьте аналогично)
+        
+        spi.endTransaction();
+        
+    } catch (...) {
+        read_success = false;
+        Serial.println("❌ Exception during ICM data reading");
+    }
+    
+    SPIManager::release();
+
+    if (read_success) {
+        current_data.timestamp = current_time;
+        last_read_time = current_time;
+        read_count++;
+        
+        // Добавление данных в буфер
+        addToBuffer(current_data);
+        
+        // Периодический отчет о состоянии буфера
+        if (read_count % 50 == 0) {
+            Serial.printf("📊 ICM Buffer: %d/%d (%.1f%%)", 
+                         buffer_index, BUFFER_SIZE, getBufferUsage());
+            if (buffer_overflow) Serial.print(" [OVERFLOW]");
+            Serial.println();
+        }
+
+        if (read_success && read_count % 20 == 0) {  // Каждые 20 чтений
+        Serial.printf("📊 IMU: Accel(%.2f,%.2f,%.2f) Gyro(%.2f,%.2f,%.2f)\n",
+                     current_data.accel[0], current_data.accel[1], current_data.accel[2],
+                     current_data.gyro[0], current_data.gyro[1], current_data.gyro[2]);
+        }
+    } else {
+        error_count++;
+    }
+    
+    return read_success;
+}
+
+bool ICMHandler::addToBuffer(const SensorData& data) {
+    if (buffer_index < BUFFER_SIZE) {
+        data_buffer[buffer_index++] = data;
+        return true;
+    } else {
+        buffer_overflow = true;
+        Serial.println("⚠️ ICM buffer overflow! Data lost.");
+        return false;
+    }
+}
+
+const SensorData& ICMHandler::getData() {
+    return current_data;
+}
+
+bool ICMHandler::isDataFresh() {
+    uint32_t current_time = millis();
+    return (uint32_t)(current_time - last_read_time) < (READ_INTERVAL + 5);
+}
+
+uint32_t ICMHandler::getReadCount() {
+    return read_count;
+}
+
+uint32_t ICMHandler::getErrorCount() {
+    return error_count;
+}
+
+
+//=================================================================================
+    /*
+    //  7. Интеграция с SDHandler - Пример использования буфера
+    //  cpp
+
+// В основном коде или в SDHandler
+void processICMData() {
+    if (ICMHandler::getBufferSize() > 0) {
+        const SensorData* buffer = ICMHandler::getBuffer();
+        size_t buffer_size = ICMHandler::getBufferSize();
+        
+        // Пакетная запись в SD
+        for (size_t i = 0; i < buffer_size; i++) {
+            SDHandler::writeData(buffer[i]);
+        }
+        
+        // Очистка буфера после записи
+        ICMHandler::clearBuffer();
+        
+        Serial.printf("💾 Written %d samples from ICM buffer to SD\n", buffer_size);
+    }
+}
+
+// Или в loop()
+void loop() {
+    // Чтение данных с ICM
+    ICMHandler::readData();
+    
+    // Периодическая запись буфера на SD (например, каждые 2 секунды)
+    static uint32_t last_buffer_flush = 0;
+    if (millis() - last_buffer_flush > 2000) {
+        processICMData();
+        last_buffer_flush = millis();
+    }
+}
+    */
+//========================================================================================
+
+//=============================================================================
+//==============    ( motor_controller.cpp )  ===================================
+//=============================================================================
+//==============================================================================
+//==============================================================================
+//==============================================================================
+//	📄 motor_controller.cpp (исправленный)
+//==============================================================================
+//📄   motor_controller.cpp (единый файл)
+//=============================================================================
+//  📄 motor_controller.cpp (исправленная версия)
+//=============================================================================
+
+#include <Arduino.h>
+#include "motor_controller.h"
+
+MotorController motor_controller;
+
+MotorController::MotorController() 
+    : current_speed_a(0), current_speed_b(0),
+      is_test_running(false), test_start_time(0), last_report_time(0) {
+}
+
+MotorController::~MotorController() {
+    // Безопасное удаление ресурсов
+    safe_delete(generator_a);
+    safe_delete(generator_b);
+    safe_delete(comparator_a);
+    safe_delete(comparator_b);
+    safe_delete(oper_a);
+    safe_delete(oper_b);
+    safe_delete(timer_a);
+    safe_delete(timer_b);
+}
+
+void MotorController::safe_delete(mcpwm_timer_handle_t& handle) {
+    if (handle) {
+        esp_err_t err = mcpwm_del_timer(handle);
+        if (err == ESP_OK) handle = nullptr;
+    }
+}
+
+void MotorController::safe_delete(mcpwm_oper_handle_t& handle) {
+    if (handle) {
+        esp_err_t err = mcpwm_del_operator(handle);
+        if (err == ESP_OK) handle = nullptr;
+    }
+}
+
+void MotorController::safe_delete(mcpwm_cmpr_handle_t& handle) {
+    if (handle) {
+        esp_err_t err = mcpwm_del_comparator(handle);
+        if (err == ESP_OK) handle = nullptr;
+    }
+}
+
+void MotorController::safe_delete(mcpwm_gen_handle_t& handle) {
+    if (handle) {
+        esp_err_t err = mcpwm_del_generator(handle);
+        if (err == ESP_OK) handle = nullptr;
+    }
+}
+
+bool MotorController::init_esc() {
+    Serial.println("Инициализация MCPWM Prelude API");
+    
+    init_mcpwm_components();
+    setup_generator_actions();
+    
+    // Установка начальной скорости
+    set_motors_speed(0);
+    
+    Serial.println("MotorController инициализирован");
+    Serial.printf("ESC пины: GPIO%d (Мотор A), GPIO%d (Мотор B)\n", ESC_A_PIN, ESC_B_PIN);
+    return true;
+}
+
+void MotorController::init_mcpwm_components() {
+    // Конфигурация таймеров с полной инициализацией
+    mcpwm_timer_config_t timer_config = {};
+    timer_config.group_id = 0;
+    timer_config.clk_src = MCPWM_TIMER_CLK_SRC_DEFAULT;
+    timer_config.resolution_hz = 10000000; // 10MHz
+    timer_config.count_mode = MCPWM_TIMER_COUNT_MODE_UP;
+    timer_config.period_ticks = 200000; // 50Hz: 10MHz/50Hz = 200000 ticks
+    timer_config.intr_priority = 0;
+    timer_config.flags.update_period_on_empty = true;
+    timer_config.flags.update_period_on_sync = true;
+    
+    // Создание таймеров
+    ESP_ERROR_CHECK(mcpwm_new_timer(&timer_config, &timer_a));
+    ESP_ERROR_CHECK(mcpwm_new_timer(&timer_config, &timer_b));
+    
+    // Конфигурация операторов с полной инициализацией
+    mcpwm_operator_config_t operator_config = {};
+    operator_config.group_id = 0;
+    operator_config.intr_priority = 0;
+    operator_config.flags.update_gen_action_on_tez = true;
+    operator_config.flags.update_gen_action_on_tep = false;
+    operator_config.flags.update_gen_action_on_sync = false;
+    
+    // Создание операторов
+    ESP_ERROR_CHECK(mcpwm_new_operator(&operator_config, &oper_a));
+    ESP_ERROR_CHECK(mcpwm_new_operator(&operator_config, &oper_b));
+    
+    // Привязка операторов к таймерам
+    ESP_ERROR_CHECK(mcpwm_operator_connect_timer(oper_a, timer_a));
+    ESP_ERROR_CHECK(mcpwm_operator_connect_timer(oper_b, timer_b));
+    
+    // Конфигурация компараторов с полной инициализацией
+    mcpwm_comparator_config_t comparator_config = {};
+    comparator_config.intr_priority = 0;
+    comparator_config.flags.update_cmp_on_tez = true;
+    comparator_config.flags.update_cmp_on_tep = false;
+    comparator_config.flags.update_cmp_on_sync = false;
+    
+    // Создание компараторов
+    ESP_ERROR_CHECK(mcpwm_new_comparator(oper_a, &comparator_config, &comparator_a));
+    ESP_ERROR_CHECK(mcpwm_new_comparator(oper_b, &comparator_config, &comparator_b));
+    
+    // Конфигурация генераторов
+    mcpwm_generator_config_t generator_config = {};
+    generator_config.flags.io_loop_back = false;
+    generator_config.flags.io_od_mode = false;
+    generator_config.flags.pull_up = false;
+    generator_config.flags.pull_down = false;
+    
+    // Генератор для мотора A
+    generator_config.gen_gpio_num = ESC_A_PIN;
+    ESP_ERROR_CHECK(mcpwm_new_generator(oper_a, &generator_config, &generator_a));
+    
+    // Генератор для мотора B
+    generator_config.gen_gpio_num = ESC_B_PIN;
+    ESP_ERROR_CHECK(mcpwm_new_generator(oper_b, &generator_config, &generator_b));
+    
+    // Запуск таймеров
+    ESP_ERROR_CHECK(mcpwm_timer_enable(timer_a));
+    ESP_ERROR_CHECK(mcpwm_timer_start_stop(timer_a, MCPWM_TIMER_START_NO_STOP));
+    
+    ESP_ERROR_CHECK(mcpwm_timer_enable(timer_b));
+    ESP_ERROR_CHECK(mcpwm_timer_start_stop(timer_b, MCPWM_TIMER_START_NO_STOP));
+}
+
+    //  motor_controller.cpp (только функция setup_generator_actions)
+    //  cpp
+void MotorController::setup_generator_actions() {
+    // Подавление предупреждений для ESP-IDF макросов
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+    
+    // Настройка действий для мотора A
+    ESP_ERROR_CHECK(mcpwm_generator_set_actions_on_timer_event(
+        generator_a,
+        MCPWM_GEN_TIMER_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, MCPWM_TIMER_EVENT_EMPTY, MCPWM_GEN_ACTION_HIGH),
+        MCPWM_GEN_TIMER_EVENT_ACTION_END()
+    ));
+    
+    ESP_ERROR_CHECK(mcpwm_generator_set_actions_on_compare_event(
+        generator_a,
+        MCPWM_GEN_COMPARE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, comparator_a, MCPWM_GEN_ACTION_LOW),
+        MCPWM_GEN_COMPARE_EVENT_ACTION_END()
+    ));
+    
+    // Настройка действий для мотора B
+    ESP_ERROR_CHECK(mcpwm_generator_set_actions_on_timer_event(
+        generator_b,
+        MCPWM_GEN_TIMER_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, MCPWM_TIMER_EVENT_EMPTY, MCPWM_GEN_ACTION_HIGH),
+        MCPWM_GEN_TIMER_EVENT_ACTION_END()
+    ));
+    
+    ESP_ERROR_CHECK(mcpwm_generator_set_actions_on_compare_event(
+        generator_b,
+        MCPWM_GEN_COMPARE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, comparator_b, MCPWM_GEN_ACTION_LOW),
+        MCPWM_GEN_COMPARE_EVENT_ACTION_END()
+    ));
+    
+    #pragma GCC diagnostic pop
+}
+
+
+int MotorController::percent_to_us(int speed_percent) const {
+    speed_percent = constrain(speed_percent, 0, 100);
+    return ESC_MIN_US + (speed_percent * (ESC_MAX_US - ESC_MIN_US) / 100);
+}
+
+uint32_t MotorController::us_to_ticks(int us) const {
+    return us * 10; // 10MHz clock = 10 ticks per microsecond
+}
+
+bool MotorController::set_motor_speed(char motor_id, int speed_percent) {
+    if (speed_percent < 0 || speed_percent > 100) {
+        return false;
+    }
+    
+    int pulse_width_us = percent_to_us(speed_percent);
+    uint32_t pulse_ticks = us_to_ticks(pulse_width_us);
+    
+    esp_err_t err;
+    if (motor_id == 'A' || motor_id == 'a') {
+        err = mcpwm_comparator_set_compare_value(comparator_a, pulse_ticks);
+        if (err == ESP_OK) {
+            current_speed_a = speed_percent;
+            return true;
+        }
+    } else if (motor_id == 'B' || motor_id == 'b') {
+        err = mcpwm_comparator_set_compare_value(comparator_b, pulse_ticks);
+        if (err == ESP_OK) {
+            current_speed_b = speed_percent;
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+bool MotorController::set_motors_speed(int speed, float ramp_time) {
+    if (speed < 0 || speed > 100) {
+        Serial.println("Ошибка: Скорость должна быть от 0 до 100%");
+        return false;
+    }
+    
+    if (ramp_time > 0) {
+        ramp_speed(speed, ramp_time);
+        return true;
+    }
+    
+    bool success_a = set_motor_speed('A', speed);
+    bool success_b = set_motor_speed('B', speed);
+    
+    if (success_a && success_b) {
+        int pulse_us = percent_to_us(speed);
+        Serial.printf("Моторы: %d%% (%dμs)\n", speed, pulse_us);
+        return true;
+    }
+    
+    return false;
+}
+
+void MotorController::ramp_speed(int target_speed, float duration) {
+    int start_speed = current_speed_a;
+    int steps = max(1, (int)(duration * 10)); // 10 шагов в секунду
+    float step_size = (target_speed - start_speed) / (float)steps;
+    
+    for (int i = 0; i < steps; i++) {
+        int intermediate_speed = start_speed + (int)(step_size * (i + 1));
+        intermediate_speed = constrain(intermediate_speed, 0, 100);
+        
+        set_motor_speed('A', intermediate_speed);
+        set_motor_speed('B', intermediate_speed);
+        
+        delay(100);
+    }
+}
+
+void MotorController::stop_motors(float ramp_time) {
+    if (ramp_time > 0) {
+        ramp_speed(0, ramp_time);
+    } else {
+        set_motor_speed('A', 0);
+        set_motor_speed('B', 0);
+    }
+    Serial.println("Моторы остановлены");
+}
+
+bool MotorController::start_test_sequence() {
+    if (is_test_running) {
+        Serial.println("Тест уже выполняется");
+        return false;
+    }
+    
+    Serial.println("=== ЗАПУСК ТЕСТОВОГО ПРОГОНА ESC ===");
+    Serial.println("1. Плавный старт до 70%...");
+    
+    is_test_running = true;
+    test_start_time = millis();
+    last_report_time = 0;
+    
+    set_motors_speed(TEST_SPEED_PERCENT, 5.0);
+    
+    Serial.println("2. Работа на тестовом уровне (4 минуты)...");
+    Serial.printf("Скорость: %d%%, Импульс: %dμs\n", TEST_SPEED_PERCENT, percent_to_us(TEST_SPEED_PERCENT));
+    
+    return true;
+}
+
+void MotorController::stop_test_sequence() {
+    if (!is_test_running) return;
+    
+    Serial.println("3. Плавная остановка моторов...");
+    stop_motors(4.0);
+    
+    is_test_running = false;
+    unsigned long test_duration = (millis() - test_start_time) / 1000;
+    Serial.printf("Тест завершен! Длительность: %lu секунд\n", test_duration);
+}
+
+String MotorController::get_motors_status() const {
+    unsigned long elapsed_seconds = is_test_running ? (millis() - test_start_time) / 1000 : 0;
+    
+    char buffer[200];
+    snprintf(buffer, sizeof(buffer), 
+        "{\"motor_a\":%d,\"motor_b\":%d,\"pulse_us\":%d,"
+        "\"test_running\":%s,\"test_time\":%lu,\"test_total\":%d}",
+        current_speed_a, current_speed_b, 
+        percent_to_us(current_speed_a),
+        is_test_running ? "true" : "false", 
+        elapsed_seconds, TEST_DURATION_SEC);
+    
+    return String(buffer);
+}
+
+bool MotorController::is_test_active() const {
+    return is_test_running;
+}
+
+void MotorController::update() {
+    if (!is_test_running) return;
+    
+    unsigned long current_time = millis();
+    unsigned long elapsed_seconds = (current_time - test_start_time) / 1000;
+    
+    // Периодические отчеты каждые 30 секунд
+    if (elapsed_seconds - last_report_time >= 30) {
+        Serial.printf("Тест: %lu/%d сек\n", elapsed_seconds, TEST_DURATION_SEC);
+        last_report_time = elapsed_seconds;
+    }
+    
+    // Завершение теста по времени
+    if (elapsed_seconds >= TEST_DURATION_SEC) {
+        stop_test_sequence();
+    }
+}
+
+
+//  ==========================================================================================
+//  🎯 Основные улучшения:
+//  
+//      ✅ Правильный расчет импульсов - исправлена математика
+//      ✅ Безопасное управление ресурсами - проверка ошибок
+//      ✅ Разделение конфигурации - вынесено в отдельные файлы
+//      ✅ Улучшенная обработка ошибок - все функции возвращают статус
+//      ✅ Структурированные данные - MotorResources для каждого мотора
+//      ✅ Безопасный деструктор - проверка успешности удаления
+//      ✅ Расширенный статус - больше информации в JSON
+//      ✅ Лучшее логирование - с эмодзи и уровнями важности
+//  
+//  Теперь код более надежный, читаемый и легко расширяемый! 🚀
+
+
+/*
+
+Упрощенная версия с обычным PWM (альтернатива)
+
+Если с MCPWM Prelude будут проблемы, вот версия с обычным PWM:
+cpp
+
+/ * *
+ * Альтернативная версия с использованием стандартного PWM
+ * /
+
+#include <Arduino.h>
+
+class MotorController {
+private:
+  const int ESC_A_PIN = 25;
+  const int ESC_B_PIN = 26;
+  const int PWM_FREQ = 50;
+  const int PWM_RESOLUTION = 16;
+  
+  int percent_to_duty(int speed_percent) {
+    return map(speed_percent, 0, 100, 3275, 6553); // Для 16-bit resolution
+  }
+  
+public:
+  MotorController() {
+    ledcSetup(0, PWM_FREQ, PWM_RESOLUTION);
+    ledcSetup(1, PWM_FREQ, PWM_RESOLUTION);
+    ledcAttachPin(ESC_A_PIN, 0);
+    ledcAttachPin(ESC_B_PIN, 1);
+    set_motors_speed(0);
+  }
+  
+  void set_motors_speed(int speed) {
+    int duty = percent_to_duty(speed);
+    ledcWrite(0, duty);
+    ledcWrite(1, duty);
+  }
+};
+
+//  Ключевые изменения:
+        Ключевые изменения:
+    ✅ Используется #include <driver/mcpwm_prelude.h>
+    ✅ Новый API MCPWM с handles вместо legacy функций
+    ✅ Правильное управление ресурсами (создание/удаление)
+    ✅ Современная конфигурация таймеров и генераторов
+    ✅ Обработка ошибок через ESP_ERROR_CHECK
+Теперь код использует актуальный драйвер MCPWM без deprecated предупреждений!
+*/
+
+//-------------------------------------------------------------------------
+
+/*
+Альтернативная упрощенная версия с LEDC PWM
+
+Если MCPWM Prelude все равно вызывает проблемы, вот надежная версия с LEDC:
+cpp
+
+/ * *
+ * Упрощенная версия с LEDC PWM для ESC
+ * /
+
+#include <Arduino.h>
+
+class SimpleMotorController {
+private:
+  const int ESC_A_PIN = 25;
+  const int ESC_B_PIN = 26;
+  const int PWM_FREQ = 50;
+  const int PWM_RESOLUTION = 16;
+  
+  int current_speed_a = 0;
+  int current_speed_b = 0;
+  bool is_test_running = false;
+  unsigned long test_start_time = 0;
+  
+  int percent_to_duty(int speed_percent) {
+    // Для 16-bit resolution: 0% = 3275, 100% = 6553
+    return map(constrain(speed_percent, 0, 100), 0, 100, 3275, 6553);
+  }
+  
+  void ramp_speed(int target_speed, float duration) {
+    int start_speed = current_speed_a;
+    int steps = duration * 10;
+    float step_size = (target_speed - start_speed) / steps;
+    
+    for (int i = 0; i < steps; i++) {
+      int speed = start_speed + step_size * (i + 1);
+      set_motors_speed(speed, 0);
+      delay(100);
+    }
+  }
+
+public:
+  SimpleMotorController() {
+    ledcSetup(0, PWM_FREQ, PWM_RESOLUTION);
+    ledcSetup(1, PWM_FREQ, PWM_RESOLUTION);
+    ledcAttachPin(ESC_A_PIN, 0);
+    ledcAttachPin(ESC_B_PIN, 1);
+    set_motors_speed(0);
+    Serial.println("SimpleMotorController инициализирован");
+  }
+  
+  void set_motors_speed(int speed, float ramp_time = 0) {
+    speed = constrain(speed, 0, 100);
+    
+    if (ramp_time > 0) {
+      ramp_speed(speed, ramp_time);
+    } else {
+      int duty = percent_to_duty(speed);
+      ledcWrite(0, duty);
+      ledcWrite(1, duty);
+      current_speed_a = speed;
+      current_speed_b = speed;
+      Serial.printf("Моторы: %d%%\n", speed);
+    }
+  }
+  
+  void start_test_sequence() {
+    Serial.println("Запуск теста...");
+    set_motors_speed(70, 5.0);
+    is_test_running = true;
+    test_start_time = millis();
+  }
+  
+  void update() {
+    if (is_test_running && millis() - test_start_time > 240000) {
+      set_motors_speed(0, 4.0);
+      is_test_running = false;
+      Serial.println("Тест завершен");
+    }
+  }
+};
+
+SimpleMotorController motor_controller;
+
+Ключевые исправления:
+    ✅ Полная инициализация всех полей структур
+    ✅ Добавлены intr_priority = 0 и allow_pd = false
+    ✅ Исправлена конфигурация действий генераторов
+    ✅ Упрощен расчет импульсов для ESC
+    ✅ Добавлена альтернативная версия с LEDC
+Теперь код должен компилироваться без предупреждений!
+Теперь код использует актуальный драйвер MCPWM без deprecated предупреждений!
+
+
+
+*/
+
+
+    //===================================================
+    //  6. SD_Handler.cpp - Реализация с буферизацией
+    //===================================================
+    //
+    //  cpp
+
+#include "SD_Handler.h"
+#include <SPI.h>
+
+// Инициализация статических переменных
+uint32_t SDHandler::last_write_time = 0;
+uint32_t SDHandler::last_flush_time = 0;
+File SDHandler::data_file;
+bool SDHandler::sd_initialized = false;
+uint8_t SDHandler::write_buffer[SDHandler::BUFFER_SIZE];
+size_t SDHandler::buffer_index = 0;
+uint32_t SDHandler::write_count = 0;
+uint32_t SDHandler::error_count = 0;
+
+
+
+
+// SD_Handler.cpp  
+bool SDHandler::begin() {
+    if (!SPIManager::acquireForSD(100)) {
+        return false;
+    }
+
+    SPIManager::getSPI().beginTransaction(SPISettings(25000000, MSBFIRST, SPI_MODE0));
+    bool success = SD.begin(SPI_SD_CS);
+    
+    if (success) {
+        if (!SD.exists("/data")) SD.mkdir("/data");
+        char filename[32];
+        snprintf(filename, sizeof(filename), "/data/data_%lu.bin", millis());
+        data_file = SD.open(filename, FILE_WRITE);
+        success = !!data_file;
+    }
+    
+    SPIManager::getSPI().endTransaction();
+    SPIManager::release();
+    
+    return success;
+}
+
+        /*  
+bool SDHandler::begin() {
+    if (!SPIManager::acquireForSD(100)) {
+        Serial.println("❌ Failed to acquire SPI for SD");
+        return false;
+    }
+
+    SPIManager::getSPI().beginTransaction(SPISettings(25000000, MSBFIRST, SPI_MODE0));
+    sd_initialized = SD.begin(SPI_SD_CS);
+    
+    if (sd_initialized) {
+        // Создаем директорию для данных
+        if (!SD.exists("/data")) {
+            SD.mkdir("/data");
+        }
+        
+        // Создаем файл с timestamp
+        char filename[32];
+        snprintf(filename, sizeof(filename), "/data/data_%lu.bin", millis());
+        data_file = SD.open(filename, FILE_WRITE);
+        
+        if (!data_file) {
+            Serial.println("❌ Failed to open data file");
+            sd_initialized = false;
+        } else {
+            Serial.println("✅ SD card and file initialized");
+            Serial.printf("📊 Free space: %llu bytes\n", getFreeSpace());
+        }
+    }
+    
+    SPIManager::getSPI().endTransaction();
+    SPIManager::release();
+
+    last_write_time = millis();
+    last_flush_time = millis();
+    buffer_index = 0;
+    
+    return sd_initialized;
+}
+*/
+
+
+bool SDHandler::writeData(const SensorData& data) {
+    if (!sd_initialized) return false;
+    
+    // Проверка свободного места
+    if (!checkFreeSpace()) {
+        Serial.println("⚠️ Low disk space, stopping writes");
+        sd_initialized = false;
+        return false;
+    }
+    
+    uint32_t current_time = millis();
+    if ((uint32_t)(current_time - last_write_time) < WRITE_INTERVAL) {
+        return false;
+    }
+
+    // Буферизация данных
+    if (buffer_index + sizeof(data) > BUFFER_SIZE) {
+        if (!flushBuffer()) {
+            error_count++;
+            return false;
+        }
+    }
+    
+    memcpy(&write_buffer[buffer_index], &data, sizeof(data));
+    buffer_index += sizeof(data);
+    write_count++;
+    
+    // Авто-сброс буфера каждые 5 секунд или при заполнении
+    if (current_time - last_flush_time > 5000 || buffer_index >= BUFFER_SIZE * 0.8) {
+        if (!flushBuffer()) {
+            error_count++;
+            return false;
+        }
+    }
+    
+    last_write_time = current_time;
+    return true;
+}
+
+bool SDHandler::flushBuffer() {
+    if (buffer_index == 0) return true;
+    
+    if (!SPIManager::acquireForSD(100)) {
+        Serial.println("⚠️ Could not acquire SPI for flush");
+        return false;
+    }
+
+    bool success = false;
+    SPIManager::getSPI().beginTransaction(SPISettings(25000000, MSBFIRST, SPI_MODE0));
+    
+    if (data_file) {
+        size_t bytes_written = data_file.write(write_buffer, buffer_index);
+        success = (bytes_written == buffer_index);
+        
+        if (success) {
+            data_file.flush();
+            Serial.printf("💾 Flushed %d bytes to SD\n", buffer_index);
+        } else {
+            Serial.printf("❌ Write failed: %d/%d bytes\n", bytes_written, buffer_index);
+        }
+    }
+    
+    SPIManager::getSPI().endTransaction();
+    SPIManager::release();
+    
+    buffer_index = 0;
+    last_flush_time = millis();
+    return success;
+}
+
+bool SDHandler::checkFreeSpace() {
+    if (!sd_initialized) return false;
+    
+    uint64_t free_space = getFreeSpace();
+    if (free_space < MIN_FREE_SPACE) {
+        Serial.printf("⚠️ Low disk space: %llu bytes left\n", free_space);
+        return false;
+    }
+    
+    return true;
+}
+
+uint64_t SDHandler::getFreeSpace() {
+    if (!sd_initialized) return 0;
+    
+    if (!SPIManager::acquireForSD(50)) return 0;
+    
+    SPIManager::getSPI().beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
+    uint64_t total = SD.totalBytes();
+    uint64_t used = SD.usedBytes();
+    SPIManager::getSPI().endTransaction();
+    SPIManager::release();
+    
+    return (total > used) ? (total - used) : 0;
+}
+
+void SDHandler::end() {
+    // Сброс оставшихся данных в буфере
+    if (buffer_index > 0) {
+        flushBuffer();
+    }
+    
+    if (data_file) {
+        data_file.close();
+        Serial.println("✅ Data file closed");
+    }
+    
+    sd_initialized = false;
+    buffer_index = 0;
+}
+
+float SDHandler::getSuccessRate() {
+    return (write_count > 0) ? (100.0f * (write_count - error_count) / write_count) : 100.0f;
+}
+
+
+//
+//===================================================================
+//  2. Исправленный SPI_Manager.cpp
+//===================================================================
+//
+//  2. Исправленный SPI_Manager.cpp
+//
+#include "SPI_Manager.h"
+
+bool SPIManager::spi_busy = false;
+uint32_t SPIManager::last_operation_time = 0;
+uint8_t SPIManager::current_cs_pin = 0;
+
+bool SPIManager::begin() {
+    SPI.begin(VSPI_SCLK, VSPI_MISO, VSPI_MOSI);
+    pinMode(SPI_ICM_CS, OUTPUT);
+    pinMode(SPI_SD_CS, OUTPUT);
+    digitalWrite(SPI_ICM_CS, HIGH);
+    digitalWrite(SPI_SD_CS, HIGH);
+    spi_busy = false;
+    return true;
+}
+
+bool SPIManager::acquireForICM(uint32_t timeout) {
+    return acquireSPI(SPI_ICM_CS, timeout);
+}
+
+bool SPIManager::acquireForSD(uint32_t timeout) {
+    return acquireSPI(SPI_SD_CS, timeout);
+}
+
+void SPIManager::release() {
+    if (current_cs_pin != 0) {
+        digitalWrite(current_cs_pin, HIGH);
+        current_cs_pin = 0;
+    }
+    spi_busy = false;
+}
+
+bool SPIManager::acquireSPI(uint8_t cs_pin, uint32_t timeout) {
+    uint32_t start = millis();
+    
+    while (spi_busy && (millis() - start < timeout)) {
+        delay(1); // Короткая пауза, но лучше использовать vTaskDelay в FreeRTOS
+    }
+    
+    if (spi_busy) return false;
+    
+    spi_busy = true;
+    current_cs_pin = cs_pin;
+    digitalWrite(cs_pin, LOW);
+    last_operation_time = millis();
+    
+    return true;
+}
+

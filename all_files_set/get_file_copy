@@ -1,0 +1,5 @@
+
+
+cat CommonTypes.h Config.h E49_Controller.h Eleron_Controller.h ICM_Handler.h  motor_controller.h SD_Handler.h SPI_Manager.h > files_h.txt   
+
+cat ESP32_Air_Plane_0001.ino E49_Controller.cpp Eleron_Controller.cpp ICM_Handler.cpp motor_controller.cpp SD_Handler.cpp SPI_Manager.cpp  > files_cpp.txt 

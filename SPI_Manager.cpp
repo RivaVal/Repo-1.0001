@@ -1,15 +1,19 @@
 
-    //
-    //  2. Исправленный SPI_Manager.cpp
-    //  cpp
-    //
+//
+//===================================================================
+//  2. Исправленный SPI_Manager.cpp
+//===================================================================
+//
+//  2. Исправленный SPI_Manager.cpp
+//
 #include "SPI_Manager.h"
 
 bool SPIManager::spi_busy = false;
 uint32_t SPIManager::last_operation_time = 0;
+uint8_t SPIManager::current_cs_pin = 0;
 
 bool SPIManager::begin() {
-    SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
+    SPI.begin(VSPI_SCLK, VSPI_MISO, VSPI_MOSI);
     pinMode(SPI_ICM_CS, OUTPUT);
     pinMode(SPI_SD_CS, OUTPUT);
     digitalWrite(SPI_ICM_CS, HIGH);
@@ -27,26 +31,27 @@ bool SPIManager::acquireForSD(uint32_t timeout) {
 }
 
 void SPIManager::release() {
-    digitalWrite(SPI_ICM_CS, HIGH);
-    digitalWrite(SPI_SD_CS, HIGH);
+    if (current_cs_pin != 0) {
+        digitalWrite(current_cs_pin, HIGH);
+        current_cs_pin = 0;
+    }
     spi_busy = false;
 }
 
 bool SPIManager::acquireSPI(uint8_t cs_pin, uint32_t timeout) {
     uint32_t start = millis();
     
-    while (spi_busy) {
-        if (millis() - start > timeout) {
-            return false;
-        }
-        delay(1);
+    while (spi_busy && (millis() - start < timeout)) {
+        delay(1); // Короткая пауза, но лучше использовать vTaskDelay в FreeRTOS
     }
-
+    
+    if (spi_busy) return false;
+    
     spi_busy = true;
-    digitalWrite(SPI_ICM_CS, HIGH);
-    digitalWrite(SPI_SD_CS, HIGH);
+    current_cs_pin = cs_pin;
     digitalWrite(cs_pin, LOW);
     last_operation_time = millis();
     
     return true;
 }
+

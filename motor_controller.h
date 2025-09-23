@@ -67,8 +67,8 @@
 class MotorController {
 private:
     // Конфигурация пинов ESC
-    static const int ESC_A_PIN = 25;
-    static const int ESC_B_PIN = 26;
+    static const uint8_t ESC_A_PIN = 25;
+    static const uint8_t ESC_B_PIN = 26;
     
     // Параметры ESC
     static const int ESC_MIN_US = 1000;

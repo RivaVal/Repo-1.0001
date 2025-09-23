@@ -1,0 +1,31 @@
+# !/bin/bash
+
+#//echo "--   FILE:: command.create.all    --"
+
+# Удалить устаревшие данные
+rm ./all_files_set/files.h.txt 
+echo "------- Файл      ::./all_files_set/files.h.txt -------УДАЛЕН  ----"
+rm ./all_files_set/files.cpp.txt
+echo "------- Файл      ::./all_files_set/files.cpp.txt -----УДАЛЕН  ----"
+#rm ./all_files_set/files.all.txt 
+#echo "------- Файл      ::./all_files_set/files.all.txt ---УДАЛЕН  ----"
+rm ./all_files_set/files.create.all 
+echo "------- Файл      :./all_files_set/files.create.all ---УДАЛЕН  ----"
+
+
+cat CommonTypes.h Config.h E49_Controller.h Eleron_Controller.h ICM_Handler.h motor_controller.h SD_Handler.h SPI_Manager.h GlobalVars.h > ./all_files_set/files.h.txt   
+echo "------------- Файл      :: files.h.txt создан   ---------------"
+
+cat ESP32_Receiver_Air_Plane_0001.ino E49_Controller.cpp Eleron_Controller.cpp ICM_Handler.cpp motor_controller.cpp SD_Handler.cpp SPI_Manager.cpp GlobalVars.cpp > ./all_files_set/files.cpp.txt 
+echo "------------- Файл      :: files.cpp.txt    создан -----------"
+
+cat CommonTypes.h Config.h E49_Controller.h Eleron_Controller.h ICM_Handler.h motor_controller.h SD_Handler.h SPI_Manager.h GlobalVars.h > ./all_files_set/files.create.all   
+
+cat ESP32_Receiver_Air_Plane_0001.ino E49_Controller.cpp Eleron_Controller.cpp ICM_Handler.cpp motor_controller.cpp SD_Handler.cpp SPI_Manager.cpp  GlobalVars.cpp >> ./all_files_set/files.create.all 
+
+echo "------------- Файл       :: files.create.all   создан -----------"
+
+
+echo "------------- Готово        -!-"
+
+

@@ -36,28 +36,67 @@ typedef struct {
     uint8_t status;             // 1 Статус получения
     uint8_t crc8;               // 1 Контрольная сумма
 } AckPacket_t;
-        //#pragma pack(pop)
+
+enum class SystemState {
+    BOOT,           // Загрузка
+    INITIALIZING,   // Инициализация
+    STANDBY,        // Ожидание
+    ACTIVE,         // Активная работа
+    ERROR,          // Ошибка
+    RECOVERY        // Восстановление
+};
+
+// Углы сервоприводов (extern объявления)
+extern int servoAngles[5];
+extern int servoTargetAngles[5];
+
+
+// Конфигурация сервоприводов
+// const int servoPins[] = {12, 13, 14, 27, 26};
+const int servoPins[] = { 12, 13, 14, 27, 26 };
+const ledc_channel_t servoChannels[] = {
+  LEDC_CHANNEL_0,
+  LEDC_CHANNEL_1,
+  LEDC_CHANNEL_2,
+  LEDC_CHANNEL_3,
+  LEDC_CHANNEL_4
+};
+
+// Углы сервоприводов
+//  extern int servoAngles[5] = { 0, 0, 0, 0, 0 };
+//  extern int servoTargetAngles[5] = { 0, 0, 0, 0, 0 };
+//  extern int servoAngles[5];
+//  extern int servoTargetAngles[5];
+
 
 // Размеры структур
 constexpr uint8_t DATA_COM_SET_SIZE =  sizeof(DataComSet_t) ;
 constexpr uint8_t ACK_PACKET_SIZE = sizeof(AckPacket_t) ;
 
 // Добавить новые определения:
-#define E49_ICM_CS   22    // Новое имя для ICM
-#define E49_SD_CS    33    // Новое имя для SD
-#define E49_ICM_INT  32    // Interrupt pin (опционально)
+//  #define E49_ICM_CS   22    // Новое имя для ICM
+//  #define E49_SD_CS    33    // Новое имя для SD
+//  #define E49_ICM_INT  32    // Interrupt pin (опционально)
 // Используем стандартный VSPI
 // VSPI пины по умолчанию на ESP32:
 #define VSPI_SCLK   18
 #define VSPI_MISO   19
 #define VSPI_MOSI   23
+// Добавить новые определения:
+//  #define SPI_ICM_CS   22    // Новое имя для ICM
+//  #define SPI_SD_CS    33    // Новое имя для SD
+//  #define SPI_ICM_INT  32    // Interrupt pin (опционально)
 
 // Конфигурация пинов для модуля E49 
-const uint8_t E49_PIN_RX = 16 ;
-const uint8_t E49_PIN_TX = 17 ;
-const uint8_t E49_PIN_M0 = 4  ;
-const uint8_t E49_PIN_M1 = 21;  // Вместо 18 - используем свободный GPIO21
-const uint8_t E49_PIN_AUX = 5 ;
+static const uint8_t E49_PIN_RX = 16 ;
+static const uint8_t E49_PIN_TX = 17 ;
+static const uint8_t E49_PIN_M0 = 4  ;
+static const uint8_t E49_PIN_M1 = 21;  // Вместо 18 - используем свободный GPIO21
+static const uint8_t E49_PIN_AUX = 5 ;
+
+static const uint8_t SPI_ICM_CS  = 22 ;   // Новое имя для ICM
+static const uint8_t SPI_SD_CS   = 33 ;   // Новое имя для SD
+static const uint8_t SPI_ICM_INT = 32 ;   // Interrupt pin (опционально)
 
 // Параметры связи
 #define SERIAL_BAUDRATE 9600
@@ -75,8 +114,15 @@ const uint32_t RECONNECT_INTERVAL_MS = 2000;      // Интервал между
 const uint32_t TEST_COMMUNICATION_TIMEOUT_MS = 500; // Таймаут тестирования связи
 const uint32_t MAX_RECONNECT_ATTEMPTS = 5;        // Максимальное количество попыток
 
-
+// Оставьте одно определение:
+constexpr uint16_t AUX_TIMEOUT_MS = 300;
+constexpr uint16_t ACK_TIMEOUT_MS = 500;
+constexpr uint16_t RECEIVE_TIMEOUT_MS = 1000;
+//  constexpr uint16_t AUX_TIMEOUT_MS = 300; // Более современный стиль C++
+//  constexpr uint16_t ACK_TIMEOUT_MS = 500; // Более современный стиль C++
 //  #define AUX_TIMEOUT_MS 300         // 
+//  #define ACK_TIMEOUT_MS 300         // 
+
 //  #define COM_SETALL_MASK 0b00000001  //         // Маска данных  
 //  #define RECEIVE_TIMEOUT_MS 1000      // Задержеа перед очередным получением данных
 
@@ -134,8 +180,8 @@ enum ebyteStatus {
 };
 
 // Добавьте если нет:
-extern const int servoPins[5];
-extern const ledc_channel_t channels[5];
+// extern const int servoPins[5];
+// extern const ledc_channel_t channels[5];
 
 
 // Структура c бинарными данными для сбора их из модуля ICM_20948
@@ -243,22 +289,22 @@ public:
 
 // Ключи, отладка 
 typedef struct {
-    bool RC_Debug;
-    bool recieve_Debug;          // обратите внимание на написание! // Отладочный вывод функции init()
-    bool sender_Debug;         // Отладочный вывод функции init()
-    bool ebyte_Debug;
-    bool mcpwm_Debug;
-    bool ledc_Debug;
-    bool setup_Debug;
-    bool loop_Debug;
+    bool RC_Debug;      // Отладочный вывод функции init()
+    bool recieve_Debug; // обратите внимание на написание! recieve() 
+    bool sender_Debug;  // Отладочный вывод функции sender()
+    bool ebyte_Debug;   // Отладочный вывод функции ebyte()           
+    bool mcpwm_Debug;   // Отладочный вывод функции mcpwm()
+    bool ledc_Debug;    // Отладочный вывод функции ledc()
+    bool setup_Debug;   // Отладочный вывод функции setup()
+    bool loop_Debug;    // Отладочный вывод функции loop()
     bool diod_Debug;
-    bool icm20984_Debug;
-    bool eleron_Debug;           // Debug ALL eleron prog
-    bool slidePot_Debug;        // Отладка для SLIDE_POT проекта
-    bool throttle_Debug;         // Debug ALL Throttle prog   
-    bool joystick_Debug;
-    bool incomedata_Debug;
-    bool processdata_Debug;     // Debug all process function
+    bool icm20984_Debug;  // Отладочный вывод функции icm20984()
+    bool eleron_Debug;    // Debug ALL eleron prog
+    bool slidePot_Debug;  // Отладка для SLIDE_POT проекта
+    bool throttle_Debug;  // Debug ALL Throttle prog   
+    bool joystick_Debug;  // Отладочный вывод функции joystick()
+    bool incomedata_Debug;  // Отладочный вывод функции incomedata()
+    bool processdata_Debug;     // Debug all process function processdata()
     bool cc;
  } ControllerDebug_t;
 #pragma pack(pop)

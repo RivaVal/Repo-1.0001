@@ -1,0 +1,24 @@
+# !/bin/bash
+
+# Удалить устаревшие данные
+rm ./all_files_set/files_h.txt 
+rm ./all_files_set/files_cpp.txt
+rm ./all_files_set/files_all.txt 
+
+cat CommonTypes.h Config.h E49_Controller.h Eleron_Controller.h ICM_Handler.h motor_controller.h SD_Handler.h SPI_Manager.h GlobalVars.h > ./all_files_set/files_h.txt   
+echo "------------- Файл      :: files_h.txt создан   ---------------"
+
+
+cat ESP32_Air_Plane_0001.ino E49_Controller.cpp Eleron_Controller.cpp ICM_Handler.cpp motor_controller.cpp SD_Handler.cpp SPI_Manager.cpp GlobalVars.cpp > ./all_files_set/files_cpp.txt 
+echo "------------- Файл      :: files_cpp.txt    создан -----------"
+
+
+cat CommonTypes.h Config.h E49_Controller.h Eleron_Controller.h ICM_Handler.h motor_controller.h SD_Handler.h SPI_Manager.h GlobalVars.h > ./all_files_set/files_all.txt   
+
+cat ESP32_Air_Plane_0001.ino E49_Controller.cpp Eleron_Controller.cpp ICM_Handler.cpp motor_controller.cpp SD_Handler.cpp SPI_Manager.cpp  GlobalVars.cpp >> ./all_files_set/files_all.txt 
+echo "------------- Файл       :: files_all.txt   создан -----------"
+
+
+echo "------------- Готово        -!-"
+
+

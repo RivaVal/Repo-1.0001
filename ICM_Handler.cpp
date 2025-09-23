@@ -29,6 +29,35 @@ SensorData ICMHandler::data_buffer[ICMHandler::BUFFER_SIZE];
 size_t ICMHandler::buffer_index = 0;
 bool ICMHandler::buffer_overflow = false;
 
+    /*  
+// ICM_Handler.cpp
+bool ICMHandler::begin() {
+    if (!SPIManager::acquireForICM(10)) {
+        return false;
+    }
+
+    // Быстрая инициализация без ожидания
+    SPIClass& spi = SPIManager::getSPI();
+    spi.beginTransaction(SPISettings(10000000, MSBFIRST, SPI_MODE0));
+    
+    digitalWrite(SPI_ICM_CS, LOW);
+    spi.transfer(0x80 | 0x00);
+    uint8_t id = spi.transfer(0);
+    digitalWrite(SPI_ICM_CS, HIGH);
+    
+    spi.endTransaction();
+    SPIManager::release();
+    
+    bool success = (id == 0xEA);
+    if (success) {
+        Serial.println("ICM initialized");
+    }
+    
+    return success;
+}
+*/
+
+    
 bool ICMHandler::begin() {
     if (!SPIManager::acquireForICM(10)) {
         error_count++;
@@ -57,6 +86,7 @@ bool ICMHandler::begin() {
         Serial.println("❌ Exception during ICM initialization");
     }
     
+
     spi.endTransaction();
     SPIManager::release();
     
@@ -72,9 +102,13 @@ bool ICMHandler::readData() {
     uint32_t current_time = millis();
     
     // Защита от переполнения millis()
-    if ((uint32_t)(current_time - last_read_time) < READ_INTERVAL) {
+    if (current_time - last_read_time < READ_INTERVAL) {
         return false;
     }
+
+    //if ((uint32_t)(current_time - last_read_time) < READ_INTERVAL) {
+    //    return false;
+    //}
 
     if (!SPIManager::acquireForICM(5)) {
         error_count++;
@@ -96,8 +130,27 @@ bool ICMHandler::readData() {
         current_data.accel[2] = (spi.transfer(0) << 8) | spi.transfer(0);
         digitalWrite(SPI_ICM_CS, HIGH);
         
-        // Чтение гироскопа (добавьте аналогично)
-        // Чтение магнитометра (добавьте аналогично)
+       // Чтение гироскопа (добавьте аналогично)
+        // Чтение гироскопа
+        digitalWrite(SPI_ICM_CS, LOW);
+        spi.transfer(0x80 | 0x33); // GYRO_XOUT_H
+        current_data.gyro[0] = ((int16_t)(spi.transfer(0) << 8) | spi.transfer(0)) * 250.0 / 32768.0;
+        current_data.gyro[1] = ((int16_t)(spi.transfer(0) << 8) | spi.transfer(0)) * 250.0 / 32768.0;
+        current_data.gyro[2] = ((int16_t)(spi.transfer(0) << 8) | spi.transfer(0)) * 250.0 / 32768.0;
+        digitalWrite(SPI_ICM_CS, HIGH);
+
+        // Чтение магнитометра (требует дополнительной инициализации)
+        digitalWrite(SPI_ICM_CS, LOW);
+        spi.transfer(0x80 | 0x11); // MAG_XOUT_L
+        int16_t mag_x = (spi.transfer(0) << 8) | spi.transfer(0);
+        int16_t mag_y = (spi.transfer(0) << 8) | spi.transfer(0);
+        int16_t mag_z = (spi.transfer(0) << 8) | spi.transfer(0);
+        digitalWrite(SPI_ICM_CS, HIGH);
+
+        current_data.mag[0] = mag_x * 0.15; // Конвертация в µT
+        current_data.mag[1] = mag_y * 0.15;
+        current_data.mag[2] = mag_z * 0.15;
+         // Чтение магнитометра (добавьте аналогично)
         
         spi.endTransaction();
         
@@ -122,6 +175,12 @@ bool ICMHandler::readData() {
                          buffer_index, BUFFER_SIZE, getBufferUsage());
             if (buffer_overflow) Serial.print(" [OVERFLOW]");
             Serial.println();
+        }
+        if (read_success && read_count % 20 == 0) {
+                Serial.printf("📊 [%lu] IMU: A(%.2f,%.2f,%.2f) G(%.2f,%.2f,%.2f) M(%.2f,%.2f,%.2f)\n", millis(),
+                 current_data.accel[0], current_data.accel[1], current_data.accel[2],
+                 current_data.gyro[0], current_data.gyro[1], current_data.gyro[2],
+                 current_data.mag[0], current_data.mag[1], current_data.mag[2]);
         }
     } else {
         error_count++;
